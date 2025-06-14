@@ -1,0 +1,42 @@
+@echo off
+REM ========== Doctor's Prompt Assistant: Full-Stack Launcher (Advanced) ==========
+
+REM ----[ 1. Optional: Activate your Python env (Uncomment/modify if needed) ]----
+REM call C:\Users\youruser\anaconda3\Scripts\activate.bat yourenv
+REM call C:\path\to\venv\Scripts\activate.bat
+
+REM ----[ 2. Start Redis/Memurai if not already running ]----
+tasklist /FI "IMAGENAME eq redis-server.exe" 2>NUL | find /I /N "redis-server.exe">NUL
+if "%ERRORLEVEL%"=="0" (
+    echo [INFO] Redis is already running.
+) else (
+    start "Redis Server" cmd /k redis-server
+    timeout /t 3 >nul
+)
+
+REM ----[ 3. Start Ollama server ]----
+tasklist /FI "IMAGENAME eq ollama.exe" 2>NUL | find /I /N "ollama.exe">NUL
+if "%ERRORLEVEL%"=="0" (
+    echo [INFO] Ollama is already running.
+) else (
+    start "Ollama Server" cmd /k ollama serve
+    timeout /t 3 >nul
+)
+
+REM ----[ 4. Preload Llama3 (optional, can skip if already present) ]----
+start "Ollama Pull" cmd /c ollama pull llama3:8b-instruct-q4_K_M > ollama_pull.log 2>&1
+timeout /t 4 >nul
+
+REM ----[ 5. Pre-run Llama3 (optional, keeps it warm) ]----
+start "Ollama Run" cmd /c ollama run llama3:8b-instruct-q4_K_M > ollama_run.log 2>&1
+timeout /t 3 >nul
+
+REM ----[ 6. Start Celery Worker (logs output to celery_worker.log) ]----
+start "Celery Worker" cmd /k celery -A celery_worker.celery worker --loglevel=info --pool=solo > celery_worker.log 2>&1
+
+REM ----[ 7. Start Flask App (logs output to flask_app.log) ]----
+start "Flask App" cmd /k python app.py > flask_app.log 2>&1
+
+REM ================== DONE ==================
+echo All services launched. Logs: ollama_pull.log, ollama_run.log, celery_worker.log, flask_app.log
+pause

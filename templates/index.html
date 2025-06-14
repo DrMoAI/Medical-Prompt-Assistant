@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🧪 Doctor's Prompt Assistant</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* Ensures both canvases always match size, on desktop/mobile */
+    .chart-scroll-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .chart-scroll-wrapper canvas {
+      width: 350px !important;
+      height: 350px !important;
+      max-width: 100vw;
+      max-height: 350px;
+      display: block;
+      margin: 0 auto 20px auto;
+      background: transparent;
+    }
+    @media (max-width: 600px) {
+      .chart-scroll-wrapper canvas {
+        width: 95vw !important;
+        height: 95vw !important;
+        min-width: 260px !important;
+        max-width: 99vw !important;
+        max-height: 340px;
+      }
+    }
+  </style>
+</head>
+<body class="light-mode">
+  <div class="container">
+    <!-- Header -->
+    <header class="card fade-in">
+      <h1>🧪 Doctor's Prompt Assistant</h1>
+      <label class="dark-toggle" for="darkModeToggle">
+        Dark Mode
+        <input type="checkbox" id="darkModeToggle" />
+        <span class="slider"></span>
+      </label>
+      <p class="subtitle">Evaluate and optimize your medical prompts for Large Language Models with detailed feedback and scoring.</p>
+    </header>
+
+    <!-- Enter Medical Prompt -->
+    <section class="card fade-in">
+      <div class="card-title"><i class="icon-edit"></i> Enter Medical Prompt</div>
+      <label for="prompt">Clinical Prompt for LLM Evaluation:</label>
+      <textarea id="prompt" maxlength="500" placeholder="e.g., Compare the risks and benefits of statin therapy for a 60-year-old male with borderline cholesterol."></textarea>
+      <div class="char-counter" id="charCount">0/500</div>
+      <div class="button-group">
+        <button class="primary" id="evaluateBtn">Evaluate Prompt</button>
+        <button class="secondary" id="loadExampleBtn">Load Example</button>
+        <button class="warning" id="clearInputBtn">Clear Input</button>
+        <button class="success premium" id="improvePromptBtn">Optimize Prompt</button>
+      </div>
+    </section>
+
+    <!-- Loading Spinner -->
+    <section id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Evaluating prompt...</p>
+    </section>
+
+    <!-- Error Display -->
+    <section id="errorMessage" class="card fade-in error-box" style="display: none;">
+      <div class="card-title"><i class="icon-alert-triangle"></i> Prompt Rejected</div>
+      <p id="errorContent" class="error-text" style="margin-top: 10px; font-size: 16px; color: #c0392b;">
+        <!-- Error message will be injected here -->
+      </p>
+    </section>
+
+    <!-- Prompt Evaluation Result -->
+    <section id="result" class="card fade-in">
+      <div class="card-title"><i class="icon-clipboard"></i> Prompt Evaluation</div>
+      <div class="score-header">
+        <div class="score-display">
+          <span id="scoreValue">--</span>/100
+          <span id="scoreRating" class="score-rating">Pending</span>
+        </div>
+        <div class="score-bar-container">
+          <div id="scoreBar" class="score-bar"></div>
+        </div>
+      </div>
+      <!-- Criteria List -->
+      <div class="criteria-list" id="criteriaList"></div>
+      <!-- Suggestions -->
+      <div class="suggestions">
+        <div class="suggestions-title"><i class="icon-lightbulb"></i> Suggestion for Improvement</div>
+        <div id="suggestionsContent"></div>
+      </div>
+    </section>
+
+    <!-- Improved Prompt Example -->
+    <section class="card fade-in info-box">
+      <div class="info-title"><i class="icon-refresh-cw"></i> Optimized Prompt</div>
+      <textarea id="improvedPrompt" class="improved-prompt-textbox" readonly></textarea>
+    </section>
+
+    <!-- LLM Compatibility -->
+    <section class="card fade-in">
+      <div class="card-title"><i class="icon-plug"></i> LLM Compatibility</div>
+      <p id="llmFeedback">Currently supports: LLaMA 3.</p>
+      <div class="model-list" id="modelList">
+        <div class="model-card">
+          <div class="model-icon">
+            <img src="/static/llama.png" alt="LLaMA 3 logo" style="height:32px; width:auto; vertical-align:middle;" />
+          </div>
+          <div class="model-name">LLaMA 3</div>
+          <div class="model-desc">Meta’s open-source model</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Evaluation Breakdown Chart -->
+    <section class="card fade-in chart-container">
+      <canvas id="scoreChart" class="chart-canvas"></canvas>
+    </section>
+
+    <section class="card fade-in chart-container">
+      <canvas id="criteriaRadarChart" class="chart-canvas"></canvas>
+    </section>
+
+    <!-- Prompt History -->
+    <section id="history" class="card fade-in history">
+      <div class="history-header">
+        <h3>Prompt History</h3>
+        <button class="warning" id="clearHistoryBtn">Clear History</button>
+      </div>
+      <ul id="historyList" class="history-list"></ul>
+    </section>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- JS Logic -->
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

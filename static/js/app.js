@@ -2,8 +2,11 @@
 let promptHistory = JSON.parse(localStorage.getItem("promptHistory")) || [];
 let myChart = null;
 let myRadarChart = null;
-window.lastRadarScores = null;
-window.lastScoreValue = null;
+let lastScoreData = null;
+let lastCriteriaData = null;
+let globalPollCount = 0;
+
+const isMobile = window.innerWidth < 600;
 
 function escapeHTML(str) {
   return str.replace(/[&<>"']/g, m => ({
@@ -11,28 +14,99 @@ function escapeHTML(str) {
   })[m]);
 }
 
-function showToast(message, type = 'error') {
-  const toast = document.createElement('div');
-  toast.className = `toast ${type}`;
-  toast.innerText = message;
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 4000);
+function disableUI() {
+  document.getElementById('evaluateBtn').disabled = true;
+  document.getElementById('loadExampleBtn').disabled = true;
+  document.getElementById('clearInputBtn').disabled = true;
+  document.getElementById('improvePromptBtn').disabled = true;
+  document.getElementById('prompt').readOnly = true;
+}
+
+function enableUI() {
+  document.getElementById('evaluateBtn').disabled = false;
+  document.getElementById('loadExampleBtn').disabled = false;
+  document.getElementById('clearInputBtn').disabled = false;
+  document.getElementById('improvePromptBtn').disabled = false;
+  document.getElementById('prompt').readOnly = false;
+}
+
+function clearResults() {
+  if (myChart) {
+    myChart.destroy();
+    myChart = null;
+  }
+  if (myRadarChart) {
+    myRadarChart.destroy();
+    myRadarChart = null;
+  }
+  document.getElementById('scoreValue').innerText = "";
+  document.getElementById('scoreRating').innerText = "";
+  document.getElementById('scoreBar').setAttribute('style', 'width: 0%');
+  document.getElementById('scoreBar').className = "score-bar";
+  document.getElementById('llmFeedback').innerText = "";
+  document.getElementById('suggestionsContent').innerHTML = "";
+
+  const resultBox = document.getElementById('result');
+  if (resultBox) {
+    resultBox.classList.remove('visible');
+    resultBox.classList.add('hidden');
+  }
+  hideErrorMessage();
 }
 
 function showErrorMessage(reason, title = "Prompt Rejected") {
-  const box = document.getElementById("errorMessage");
+  const box = document.getElementById("errorBox");
   const content = document.getElementById("errorContent");
-  const cardTitle = box?.querySelector('.card-title');
+  const cardTitle = document.getElementById("errorTitle");
+
   if (cardTitle) cardTitle.textContent = title;
   if (box && content) {
     content.textContent = reason;
+    box.classList.remove("hidden");
+    box.classList.add("visible");
     box.style.display = "block";
   }
 }
 
 function hideErrorMessage() {
-  const box = document.getElementById("errorMessage");
-  if (box) box.style.display = "none";
+  const box = document.getElementById("errorBox");
+  const content = document.getElementById("errorContent");
+  const cardTitle = document.getElementById("errorTitle");
+
+  if (box) {
+    box.style.display = "none";
+    box.classList.remove("visible");
+    box.classList.add("hidden");
+  }
+  if (content) content.textContent = "";
+  if (cardTitle) cardTitle.textContent = "";
+}
+
+function renderResults(result) {
+  const score = parseInt(result.score);
+  const criteria_scores = result.criteria || {};
+  const suggestions = Array.isArray(result.suggestions) ? result.suggestions : [];
+
+  renderChart({ score: score, criteria_scores: criteria_scores });
+  renderRadarChart(criteria_scores);
+
+  document.getElementById('suggestionsContent').innerHTML =
+    suggestions.map(s => `<p>${escapeHTML(s)}</p>`).join('');
+  document.getElementById('llmFeedback').innerText = 'Evaluated by local LLM';
+
+  const resultBox = document.getElementById('result');
+  if (resultBox) {
+    resultBox.classList.remove('hidden');
+    resultBox.classList.add('visible');
+  }
+}
+
+// ================== GLOBAL FUNCTION ==================
+function toggleDarkMode() {
+  document.body.classList.toggle("dark-mode");
+  const toggleState = document.body.classList.contains("dark-mode");
+  localStorage.setItem("darkMode", toggleState ? "enabled" : "disabled");
+  refreshCharts();
 }
 
 // ================== EVALUATION FLOW ==================
@@ -48,65 +122,95 @@ async function evaluateWithBackend(prompt) {
 }
 
 async function pollTaskStatus(taskId) {
-  return new Promise((resolve, reject) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/task/${taskId}`);
-        if (!res.ok) {
-          clearInterval(interval);
-          return reject(`Status fetch error: ${res.status}`);
+  const maxAttempts = 30;
+  const interval = 2000;
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  await delay(1000);
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetch(`/api/task/${taskId}`);
+      const json = await res.json();
+
+      if (res.status === 422) {
+        const fallback = "⚠️ Prompt rejected. Please rephrase using a clear, safe, and medically relevant instruction.";
+        const reason = json?.reason || "";
+        const error = json?.error || "";
+
+        let message = fallback;
+
+        if (error === "non_medical_prompt") {
+          if (reason.toLowerCase().includes("harmful") || reason.toLowerCase().includes("kill") || reason.toLowerCase().includes("unsafe")) {
+            message = "🚫 This prompt was flagged as harmful or unsafe. Please rephrase with respectful and medically safe language.";
+          } else {
+            message = "⚠️ Prompt rejected for being non-medical or too vague. Add clinical details and clear instructions.";
+          }
+        } else if (error === "Exception during evaluation" && reason.includes("Missing top-level fields")) {
+          message = "🚫 This prompt was flagged as harmful or unsafe. Please rephrase with respectful and medically safe language.";
+        } else {
+          if (reason) message = `⚠️ ${reason}`;
         }
-        const data = await res.json();
-        if (data.status === 'completed') {
-          clearInterval(interval);
-          resolve(data.result);
-        } else if (data.status === 'failed') {
-          clearInterval(interval);
-          reject(data.error || 'Task failed');
-        }
-      } catch (err) {
-        clearInterval(interval);
-        reject(`Polling error: ${err.message}`);
+
+        showErrorMessage(message, "Prompt Rejected");
+        clearResults();
+        document.getElementById('result')?.classList.add('hidden');
+        document.getElementById('improvePromptBtn').disabled = true;
+        return json;
       }
-    }, 1500);
-  });
+
+      if (json.status === "completed" && json.result) {
+        return json.result;
+      }
+
+
+      if (json.status === "completed" && json.result && json.result.error) {
+        // Backend returned completed but with an error
+        showErrorMessage(json.result.reason || "Prompt rejected.", "Prompt Rejected");
+        clearResults();
+        document.getElementById('result')?.classList.add('hidden');
+        document.getElementById('improvePromptBtn').disabled = true;
+        return json;
+      }
+
+      if (attempt < maxAttempts - 1) await delay(interval);
+    } catch (error) {
+      showErrorMessage("⚠️ An error occurred while polling the task.", "Backend Error");
+      throw error;
+    }
+  }
+
+  showErrorMessage("⏱️ Evaluation timed out after 60 seconds. Please try again.", "Timeout");
+  throw new Error("Evaluation timed out");
 }
 
 // ================== CHART RENDERING ==================
 function renderChart(result) {
   const isDarkMode = document.body.classList.contains('dark-mode');
-  const fontColor = isDarkMode ? '#fff' : '#333';
+  const fontColor = isDarkMode ? '#f0f0f0' : '#222';
+  const gridColor = isDarkMode ? '#444' : '#888';
+  const angleLineColor = isDarkMode ? '#666' : '#999';
 
-  // Tooltip contrast fix
-  const tooltipTitleColor = isDarkMode ? '#fff' : '#111';
-  const tooltipBodyColor = isDarkMode ? '#fff' : '#111';
-  const tooltipBgColor   = isDarkMode ? '#222' : '#fff';
+  lastScoreData = result;
 
   const labels = [
-    'Safety',
-    'Clinical Clarity',
-    'Specificity',
-    'Instructional Style',
-    'Medical Terminology'
+    'Safety', 'Clinical Clarity', 'Specificity',
+    'Instructional Style', 'Medical Terminology'
   ];
+  const keys = ['safety', 'clinical_clarity', 'specificity', 'instructional_style', 'medical_terminology'];
+  const values = keys.map(k => result.criteria_scores && result.criteria_scores[k] || 0);
 
-  const values = labels.map(label => {
-    const key = label.toLowerCase().replace(/ /g, '_');
-    return result.criteria_scores?.[key] ?? 0;
-  });
-
-  function getRadarColor(score) {
-    if (score >= 90) return { fill: 'rgba(46,204,113,0.2)', border: 'rgba(46,204,113,0.9)' };
-    if (score >= 80) return { fill: 'rgba(60,179,113,0.2)', border: 'rgba(60,179,113,0.9)' };
-    if (score >= 60) return { fill: 'rgba(255,165,0,0.2)', border: 'rgba(255,165,0,0.9)' };
-    return { fill: 'rgba(231,76,60,0.2)', border: 'rgba(231,76,60,0.9)' };
-  }
-
-  const radarColor = getRadarColor(result.score);
+  const radarColor = result.score >= 90
+    ? { fill: 'rgba(46,204,113,0.3)', border: 'rgba(46,204,113,1)' }
+    : result.score >= 80
+    ? { fill: 'rgba(60,179,113,0.3)', border: 'rgba(60,179,113,1)' }
+    : result.score >= 60
+    ? { fill: 'rgba(255,165,0,0.3)', border: 'rgba(255,165,0,1)' }
+    : { fill: 'rgba(231,76,60,0.2)', border: isDarkMode ? 'rgba(231,76,60,0.9)' : 'rgba(231,76,60,1)' };
 
   if (myChart) myChart.destroy();
   const ctx = document.getElementById('scoreChart')?.getContext('2d');
   if (!ctx) return;
+
   myChart = new Chart(ctx, {
     type: 'radar',
     data: {
@@ -122,26 +226,14 @@ function renderChart(result) {
         borderWidth: 1,
         pointRadius: 3,
         pointHoverRadius: 7,
-        pointBackgroundColor: 'rgba(0,0,0,0)'
+        pointBackgroundColor: 'rgba(0,0,0,0)',
+        pointHoverBackgroundColor: 'rgba(0,0,0,0)',
+        pointBorderColor: radarColor.border,
+        pointHoverBorderColor: radarColor.border,
       }]
     },
     options: {
-      plugins: {
-        legend: { display: false },
-        title: {
-          display: true,
-          text: '📊 Normalized Prompt Score Overview',
-          font: { size: 18, weight: 'bold', family: "'Segoe UI', Arial, sans-serif" },
-          color: fontColor,
-          padding: { top: 12, bottom: 18 }
-        },
-        tooltip: {
-          enabled: true,
-          backgroundColor: tooltipBgColor,
-          titleColor: tooltipTitleColor,
-          bodyColor: tooltipBodyColor
-        }
-      },
+      plugins: { legend: { display: false } },
       scales: {
         r: {
           min: 0,
@@ -149,88 +241,60 @@ function renderChart(result) {
           ticks: {
             stepSize: 20,
             color: fontColor,
-            backdropColor: 'rgba(0,0,0,0)',
-            font: {
-              size: window.innerWidth < 600 ? 8 : 14,
-              weight: 'bold'
-            }
+            font: { size: isMobile ? 10 : 16 },
+            backdropColor: 'transparent',
+            padding: 5
           },
           pointLabels: {
-            font: {
-              size: window.innerWidth < 600 ? 10 : 16,
-              weight: 'bold'
-            },
-            color: fontColor
+            color: fontColor,
+            padding: 10,
+            font: { size: isMobile ? 8 : 16, weight: 'bold' }
           },
-          grid: { color: '#ccc' },
-          angleLines: { color: '#bbb' }
+          grid: {
+            color: gridColor
+          },
+          angleLines: {
+            color: angleLineColor
+          }
         }
       }
     }
   });
-  if (myChart && myChart.resize) myChart.resize();
 
   document.getElementById('scoreValue').innerText = result.score || '0';
-  const ratingEl = document.getElementById('scoreRating');
-  if (ratingEl) {
-    const rating = result.score > 80 ? 'Excellent' : result.score > 60 ? 'Good' : 'Needs Work';
-    ratingEl.innerText = rating;
-  }
-  const bar = document.getElementById('scoreBar');
-  if (bar) {
-    bar.style.width = `${result.score}%`;
-    bar.className = `score-bar ${ratingEl.innerText.toLowerCase().replace(/ /g, '-')}`;
-  }
+  const rating = result.score > 80 ? 'Excellent' : result.score > 60 ? 'Good' : 'Needs Work';
+  document.getElementById('scoreRating').innerText = rating;
+  document.getElementById('scoreBar').setAttribute('style', `width: ${result.score}%`);
+  document.getElementById('scoreBar').className = `score-bar ${rating.toLowerCase().replace(/ /g, '-')}`;
 }
 
 function renderRadarChart(criteriaScores) {
   const isDarkMode = document.body.classList.contains('dark-mode');
-  const fontColor = isDarkMode ? '#fff' : '#333';
+  const fontColor = isDarkMode ? '#f0f0f0' : '#333';
+  const gridColor = isDarkMode ? '#444' : '#ccc';
+  const angleLineColor = isDarkMode ? '#666' : '#bbb';
 
-  // Tooltip contrast fix
-  const tooltipTitleColor = isDarkMode ? '#fff' : '#111';
-  const tooltipBodyColor = isDarkMode ? '#fff' : '#111';
-  const tooltipBgColor   = isDarkMode ? '#222' : '#fff';
-
-  const ctx = document.getElementById('criteriaRadarChart')?.getContext('2d');
-  if (!ctx) return;
-
-  if (myRadarChart) myRadarChart.destroy();
+  lastCriteriaData = criteriaScores;
 
   const keys = ['safety', 'clinical_clarity', 'specificity', 'instructional_style', 'medical_terminology'];
   const data = keys.map(k => criteriaScores[k] || 0);
 
-  function getRadarSegmentColor(key, value) {
-    const maxValues = {
-      safety: 30,
-      clinical_clarity: 25,
-      specificity: 20,
-      instructional_style: 15,
-      medical_terminology: 10
-    };
-    const pct = (value / maxValues[key]) * 100;
-    if (pct < 33) return 'rgba(231, 76, 60, 0.8)';   // 🔴 red
-    if (pct < 66) return 'rgba(255, 206, 86, 0.8)';  // 🟡 yellow
-    return 'rgba(75, 192, 192, 0.8)';                // 🟢 green
-  }
-
-  const segmentColors = keys.map((k, i) => getRadarSegmentColor(k, data[i]));
+  if (myRadarChart) myRadarChart.destroy();
+  const ctx = document.getElementById('criteriaRadarChart')?.getContext('2d');
+  if (!ctx) return;
 
   myRadarChart = new Chart(ctx, {
     type: 'radar',
     data: {
       labels: [
-        'Safety (30)',
-        'Clinical Clarity (25)',
-        'Specificity (20)',
-        'Instructional Style (15)',
-        'Medical Terminology (10)'
+        'Safety (30)', 'Clinical Clarity (25)', 'Specificity (20)',
+        'Instructional Style (15)', 'Medical Terminology (10)'
       ],
       datasets: [{
-        label: 'Per-Criterion Breakdown (Raw Clinical Scores)',
-        data: data,
-        backgroundColor: isDarkMode ? "rgba(0, 130, 200, 0.08)" : "rgba(0,0,0,0.05)",
-        borderColor: isDarkMode ? "#9ae6b4" : "rgba(0,0,0,0.3)",
+        label: 'Raw Scores',
+        data,
+        backgroundColor: isDarkMode ? "rgba(72, 239, 128, 0.2)" : "rgba(60, 179, 113, 0.3)",
+        borderColor: isDarkMode ? "#48ef80" : "#2e8b57",
         borderWidth: 1,
         pointRadius: 3,
         pointHoverRadius: 7,
@@ -238,200 +302,212 @@ function renderRadarChart(criteriaScores) {
       }]
     },
     options: {
-      plugins: {
-        legend: { display: false },
-        title: {
-          display: true,
-          text: '📈 Per-Criterion Breakdown (Raw Clinical Scores)',
-          font: { size: 18, weight: 'bold', family: "'Segoe UI', Arial, sans-serif" },
-          color: fontColor,
-          padding: { top: 12, bottom: 18 }
-        },
-        tooltip: {
-          enabled: true,
-          backgroundColor: tooltipBgColor,
-          titleColor: tooltipTitleColor,
-          bodyColor: tooltipBodyColor
-        }
-      },
+      plugins: { legend: { display: false } },
       scales: {
         r: {
           min: 0,
           max: 30,
+          backdropColor: 'transparent',
           ticks: {
             stepSize: 5,
             color: fontColor,
-            backdropColor: 'rgba(0,0,0,0)',
-            font: {
-              size: window.innerWidth < 600 ? 8 : 14,
-              weight: 'bold'
-            }
+            font: { size: isMobile ? 10 : 16 },
+            backdropColor: 'transparent',
+            padding: 5
           },
           pointLabels: {
-            font: {
-              size: window.innerWidth < 600 ? 8 : 16,
-              weight: 'bold'
-            },
-            color: fontColor
+            color: fontColor,
+            padding: 10,
+            font: { size: isMobile ? 7 : 16, weight: 'bold' }
           },
-          grid: { color: '#ccc', lineWidth: 2 },
-          angleLines: { color: '#bbb', lineWidth: 2 }
+          grid: {
+            color: gridColor
+          },
+          angleLines: {
+            color: angleLineColor
+          }
         }
       }
     }
   });
 }
-if (myRadarChart && myRadarChart.resize) myRadarChart.resize();
 
-// ================== MAIN LOGIC ==================
+function refreshCharts() {
+  if (lastScoreData) renderChart(lastScoreData);
+  if (lastCriteriaData) renderRadarChart(lastCriteriaData);
+}
+
+// ================== EVALUATION HANDLER ==================
 window.addEventListener('DOMContentLoaded', () => {
-  // ---- Evaluate Button ----
-  document.getElementById('evaluateBtn').onclick = () => {
-    const prompt = document.getElementById('prompt').value.trim();
-    if (!prompt) return alert('Please enter a prompt');
-    if (prompt.length > 500) return alert('Keep prompt under 500 characters');
+  const savedMode = localStorage.getItem("darkMode");
+  const darkToggle = document.getElementById("darkModeToggle");
+  if (savedMode === "enabled") {
+    document.body.classList.add("dark-mode");
+    if (darkToggle) darkToggle.checked = true;
+  }
+  if (darkToggle) {
+    darkToggle.addEventListener("change", toggleDarkMode);
+  }
 
-    document.getElementById('loading').style.display = 'block';
-    document.getElementById('result').style.display = 'none';
-    hideErrorMessage();
-
-    evaluateWithBackend(prompt).then(result => {
-      document.getElementById('improvedPrompt').value = "";
-
-      const normalized = {
-        score: parseInt(result.score) || 0,
-        suggestions: Array.isArray(result.suggestions) ? result.suggestions : [],
-        criteria_scores: result.criteria || result.criteria_scores || {}
-      };
-
-      const suggestion = normalized.suggestions[0]?.toLowerCase() || "";
-      const hasError =
-        result.error ||
-        result.reason ||
-        (normalized.score === 0 &&
-          (suggestion.includes("not match") ||
-           suggestion.includes("invalid") ||
-           suggestion.includes("fail") ||
-           suggestion.includes("non-medical")));
-
-      if (hasError) {
-        const reason = result.error || result.reason || normalized.suggestions[0] || "This prompt is non-medical or failed validation.";
-        showToast("❌ " + reason, "error");
-        showErrorMessage(reason, "Backend Error");
-        document.getElementById('loading').style.display = 'none';
-        return;
-      }
-
-      renderChart(normalized);
-      window.lastRadarScores = normalized.criteria_scores;
-      window.lastScoreValue = normalized.score;
-      renderRadarChart(normalized.criteria_scores);
-
-      document.getElementById('suggestionsContent').innerHTML = normalized.suggestions.map(s => `<p>${escapeHTML(s)}</p>`).join('');
-      document.getElementById('llmFeedback').innerText = 'Evaluated by local LLM';
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('result').style.display = 'block';
-
-      promptHistory.unshift({ prompt, score: normalized.score });
-      promptHistory = promptHistory.slice(0, 10);
-      localStorage.setItem('promptHistory', JSON.stringify(promptHistory));
-      updateHistoryUI();
-    }).catch(err => {
-      let errMsg = typeof err === "string" ? err : (err?.message || "Unknown error");
-      showToast(`Evaluation error: ${errMsg}`, 'error');
-      showErrorMessage(errMsg, "Backend Error");
-      document.getElementById('loading').style.display = 'none';
+  const promptInput = document.getElementById('prompt');
+  const charCount = document.getElementById('charCount');
+  if (promptInput && charCount) {
+    promptInput.addEventListener('input', () => {
+      charCount.innerText = `${promptInput.value.length}/500`;
     });
+  }
+
+  document.getElementById('prompt').addEventListener('input', () => {
+    const value = document.getElementById('prompt').value;
+    document.getElementById('charCount').innerText = `${value.length}/500`;
+  });
+
+  document.getElementById('clearInputBtn').onclick = () => {
+    document.getElementById('prompt').value = '';
+    document.getElementById('charCount').innerText = '0/500';
+    clearResults();
   };
 
-  // ---- Optimize/Improve Prompt ----
   document.getElementById('improvePromptBtn').onclick = async () => {
-    const original = document.getElementById('prompt').value.trim();
-    if (!original) return showToast("Enter a prompt first.", "warning");
+    const prompt = document.getElementById('prompt').value.trim();
+    if (!prompt) return alert('Please enter a prompt first.');
 
-    const loadingSection = document.getElementById("loading");
-    loadingSection.style.display = "block";
-    loadingSection.querySelector("p").innerText = "Optimizing prompt...";
+    document.getElementById('loadingText').innerText = 'Optimizing prompt...';
+    document.getElementById('loading').style.display = 'block';
 
     try {
       const res = await fetch('/api/improve_prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: original })
+        body: JSON.stringify({ prompt })
       });
+
       const data = await res.json();
-      const improved = data.improved || original;
-      document.getElementById('improvedPrompt').value = improved;
-      showToast("✨ Prompt improved!", "success");
-    } catch (err) {
-      console.error("[Auto-Improve Error]", err);
-      showToast("⚠️ Failed to improve prompt", "error");
+
+      if (data.improved) {
+        const optimizedBox = document.getElementById('improvedPrompt');
+        if (optimizedBox) {
+          optimizedBox.value = data.improved;
+          optimizedBox.scrollIntoView({ behavior: 'smooth' });
+        }
+      } else {
+        alert('Prompt improvement failed.');
+      }
+    } catch (e) {
+      alert('Server error during prompt improvement.');
     } finally {
-      loadingSection.style.display = "none";
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('loadingText').innerText = 'Evaluating prompt...';
     }
   };
 
-  // ---- Example, Clear, and Input Length ----
   document.getElementById('loadExampleBtn').onclick = () => {
-    const example = 'Explain treatment options for type 2 diabetes to a newly diagnosed patient';
+    const example = "Explain the recommended treatment for a newly diagnosed diabetic patient with hypertension.";
     document.getElementById('prompt').value = example;
-    document.getElementById('charCount').innerText = `${example.length} / 500`;
-    document.getElementById('improvedPrompt').value = ""; // Clear optimized prompt as well
+    document.getElementById('charCount').innerText = `${example.length}/500`;
   };
 
-  document.getElementById('clearInputBtn').onclick = () => {
-    document.getElementById('prompt').value = '';
-    document.getElementById('charCount').innerText = '0 / 500';
-    document.getElementById('improvedPrompt').value = ""; // Clear optimized prompt as well
+  document.getElementById('evaluateBtn').onclick = async () => {
     hideErrorMessage();
-  };
+    disableUI();
+    clearResults();
 
-  document.getElementById('prompt').oninput = () => {
-    const len = document.getElementById('prompt').value.length;
-    document.getElementById('charCount').innerText = `${len} / 500`;
-  };
+    const prompt = document.getElementById('prompt').value.trim();
+    if (!prompt) return alert('Please enter a prompt');
+    if (prompt.length > 500) return alert('Keep prompt under 500 characters');
 
-  // ---- Dark Mode Toggle ----
-  const toggle = document.getElementById('darkModeToggle');
-  if (toggle) {
-    toggle.addEventListener('change', () => {
-      document.body.classList.toggle('dark-mode');
-      document.body.classList.toggle('light-mode');
-      // Re-render BOTH radar charts to match theme (bugfix)
-      if (window.lastRadarScores && typeof window.lastScoreValue !== 'undefined') {
-        renderChart({
-          score: window.lastScoreValue,
-          criteria_scores: window.lastRadarScores
-        });
-        renderRadarChart(window.lastRadarScores);
+    document.getElementById('loading').style.display = 'block';
+
+    try {
+      const result = await evaluateWithBackend(prompt);
+
+      if (result.error === "non_medical_prompt") {
+        const friendlyMessage = "⚠️ Prompt rejected. Please include a clear medical topic like a symptom, condition, or treatment.";
+        showErrorMessage(friendlyMessage, "Prompt Rejected");
+        document.getElementById('result')?.classList.add('hidden');
+        document.getElementById('improvePromptBtn').disabled = true;
+        return;
       }
-    });
+
+      if (result.error) {
+        const reason = result.reason || "";
+        let message = "⚠️ Prompt rejected. Please rephrase using a clear, safe, and medically relevant instruction.";
+
+        if (result.error === "non_medical_prompt") {
+          if (reason.toLowerCase().includes("harmful")) {
+            message = "🚫 This prompt was flagged as harmful or unsafe. Please rephrase with medically safe, respectful language.";
+          } else {
+            message = "⚠️ Prompt rejected for being vague, non-medical, or unclear.";
+          }
+        } else if (result.error === "Exception during evaluation" && reason.includes("Missing top-level fields")) {
+          message = "⚠️ Internal error: The LLM failed to return expected data. Try rewriting the prompt with clearer medical structure.";
+        } else if (reason) {
+          message = `⚠️ ${reason}`;
+        }
+
+        showErrorMessage(message, "Prompt Rejected");
+        document.getElementById('result')?.classList.add('hidden');
+        document.getElementById('improvePromptBtn').disabled = true;
+        return;
+      }
+
+      const score = parseInt(result.score);
+      const criteria_scores = result.criteria || {};
+      const suggestions = Array.isArray(result.suggestions) ? result.suggestions : [];
+
+      if (score === 0 && result.error === "non_medical_prompt") {
+        showErrorMessage(result.suggestions?.[0] || "Prompt rejected due to vague or non-medical input.", "Prompt Rejected");
+        clearResults();
+        document.getElementById('result')?.classList.add('hidden');
+        document.getElementById('improvePromptBtn').disabled = true;
+        return;
+      }
+
+      renderResults(result);
+      
+      if (!result || typeof result.score !== "number" || !result.criteria) return;
+      document.getElementById('improvePromptBtn').disabled = false;
+
+      promptHistory.unshift({ prompt, score });
+      promptHistory = promptHistory.slice(0, 10);
+      localStorage.setItem('promptHistory', JSON.stringify(promptHistory));
+      updateHistoryUI();
+    } catch (err) {
+      showErrorMessage(err.message || "Unexpected error occurred");
+    } finally {
+      document.getElementById('loading').style.display = 'none';
+      enableUI();
+    }
+  };
+
+  function updateHistoryUI() {
+    const list = document.getElementById('historyList');
+
+    if (promptHistory.length === 0) {
+      list.innerHTML = `<li class="history-placeholder">No history yet.</li>`;
+    } else {
+      list.innerHTML = promptHistory.map((entry, i) => {
+        const scoreClass = entry.score >= 90 ? 'excellent' :
+                          entry.score >= 75 ? 'good' :
+                          entry.score >= 60 ? 'fair' : 'poor';
+        return `
+          <li class="history-item ${scoreClass}" onclick="loadHistory(${i})">
+            <div class="history-index">#${i + 1}</div>
+            <div class="history-prompt">${escapeHTML(entry.prompt)}</div>
+            <div class="history-score">${entry.score}%</div>
+          </li>
+        `;
+      }).join('');
+    }
+
+    document.getElementById('history').style.display = 'block';
   }
 
-  updateHistoryUI();
+  function loadHistory(index) {
+    const entry = promptHistory[index];
+    if (entry) {
+      document.getElementById('prompt').value = entry.prompt;
+      document.getElementById('charCount').innerText = entry.prompt.length;
+    }
+  }
 });
-
-function updateHistoryUI() {
-  const list = document.getElementById('historyList');
-  list.innerHTML = promptHistory.map((entry, i) => {
-    const scoreClass = entry.score >= 90 ? 'excellent' :
-                       entry.score >= 75 ? 'good' :
-                       entry.score >= 60 ? 'fair' : 'poor';
-    return `
-      <li class="history-item ${scoreClass}" onclick="loadHistory(${i})">
-        <div class="history-index">#${i + 1}</div>
-        <div class="history-prompt">${escapeHTML(entry.prompt)}</div>
-        <div class="history-score">${entry.score}%</div>
-      </li>
-    `;
-  }).join('');
-  document.getElementById('history').style.display = promptHistory.length ? 'block' : 'none';
-}
-
-function loadHistory(index) {
-  const entry = promptHistory[index];
-  if (entry) {
-    document.getElementById('prompt').value = entry.prompt;
-    document.getElementById('charCount').innerText = entry.prompt.length;
-  }
-}

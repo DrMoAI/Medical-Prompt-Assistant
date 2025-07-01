@@ -68,6 +68,28 @@ body.dark-mode {
   line-height: 1.6; min-height: 100vh; padding: 15px;
 }
 
+body.dark-mode .chartjs-render-monitor {
+  filter: brightness(1.4) contrast(1.2);
+}
+
+body.dark-mode .history-item {
+  background: rgba(35, 45, 44, 0.9); /* more opaque */
+  color: #e0ffe0;
+  border: 1px solid #3c4c4b;
+}
+body.dark-mode .history-item:hover {
+  background: rgba(35, 45, 44, 1);
+}
+
+body.dark-mode .score-bar-container {
+  background-color: #333;
+}
+
+body.dark-mode .score-bar {
+  color: #fff;
+  background-color: var(--primary-light);
+}
+
 /* -------------- LAYOUT & CONTAINER ------------------ */
 .container {
   max-width: 1000px; margin: 0 auto; width: 100%; padding: 0 10px;
@@ -164,9 +186,25 @@ input[type="email"]:focus {
 }
 
 /* -------- CHARACTER COUNTER & WARNING -------------- */
-.char-counter { text-align: right; font-size: 0.8rem; color: var(--text-light); margin-top: 4px; }
-body.dark-mode .char-counter { color: var(--dark-text-light); }
-.char-counter.warning { color: var(--danger); font-weight: 600; }
+
+.char-counter {
+  display: block;             
+  text-align: right;
+  font-size: 0.8rem;
+  color: var(--text-light);
+  margin-top: 4px;
+  min-width: 60px;            
+  transition: opacity 0.2s ease;
+}
+
+body.dark-mode .char-counter {
+  color: var(--dark-text-light);
+}
+
+.char-counter.warning {
+  color: var(--danger);
+  font-weight: 600;
+}
 
 /* ------------------- BUTTONS ------------------------ */
 .button-group {
@@ -506,6 +544,7 @@ body.dark-mode .history-item {
   margin: 0 auto;
   background: transparent;
 }
+
 @media (max-width: 800px) {
   .charts-row {
     flex-direction: column;
@@ -527,4 +566,82 @@ canvas {
   display: block !important;
   margin: 0 auto;
   font-size: 10px !important; /* Chart.js axis numbers */
+}
+
+.visible {
+  display: block !important;
+  visibility: visible !important;
+}
+
+.hidden {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* ---- Smooth transitions for dark mode ---- */
+body, .card, textarea, input, .history-item, .suggestions, .model-card {
+  transition: background-color 0.3s, color 0.3s, border 0.3s;
+}
+
+body.dark-mode .loading {
+  color: var(--dark-text-light); /* Already defined as #bbb */
+}
+
+body.dark-mode .history-item {
+  background-color: #2a2a2a !important; /* or a softer #1f1f1f */
+  color: var(--dark-text);
+}
+
+.loading-message {
+  font-size: 1rem;
+  color: var(--text-light);
+}
+
+body.dark-mode .loading-message {
+  color: var(--dark-text-light);
+}
+
+.loading p {
+  font-size: 1rem;
+  color: #111 !important; 
+  font-weight: 500;
+}
+
+.history-item.empty {
+  background: none;
+  cursor: default;
+  text-align: center;
+  padding: 1rem;
+  border: none;
+}
+
+#history {
+  overflow-x: hidden !important;
+  overflow-y: auto;
+  overscroll-behavior-x: none;
+  padding-bottom: 2px;
+}
+
+.history-item:hover {
+  transform: translateZ(0);
+}
+
+html, body {
+  scroll-behavior: smooth;
+}
+
+@media (max-width: 600px) {
+  canvas {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  .chartjs-render-monitor {
+    font-size: 10px !important;
+  }
+}
+
+canvas {
+  max-width: 100% !important;
+  display: block;
 }

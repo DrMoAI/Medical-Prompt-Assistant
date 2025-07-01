@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>🧪 Doctor's Prompt Assistant</title>
+  <title>🧪 Medical Prompt Assistant</title>
   <link rel="icon" type="image/png" href="/static/favicon.png">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="{{ url_for('static', filename='js/chart.min.js') }}"></script>
   <style>
-    /* Ensures both canvases always match size, on desktop/mobile */
     .chart-scroll-wrapper {
       width: 100%;
       overflow-x: auto;
@@ -32,13 +31,19 @@
         max-height: 340px;
       }
     }
+    .model-img {
+      height: 32px;
+      width: auto;
+      vertical-align: middle;
+    }
   </style>
 </head>
 <body class="light-mode">
   <div class="container">
+
     <!-- Header -->
     <header class="card fade-in">
-      <h1>🧪 Doctor's Prompt Assistant</h1>
+      <h1>🧪 Medical Prompt Assistant</h1>
       <label class="dark-toggle" for="darkModeToggle">
         Dark Mode
         <input type="checkbox" id="darkModeToggle" />
@@ -47,7 +52,7 @@
       <p class="subtitle">Evaluate and optimize your medical prompts for Large Language Models with detailed feedback and scoring.</p>
     </header>
 
-    <!-- Enter Medical Prompt -->
+    <!-- Prompt Input -->
     <section class="card fade-in">
       <div class="card-title"><i class="icon-edit"></i> Enter Medical Prompt</div>
       <label for="prompt">Clinical Prompt for LLM Evaluation:</label>
@@ -64,19 +69,17 @@
     <!-- Loading Spinner -->
     <section id="loading" class="loading">
       <div class="spinner"></div>
-      <p>Evaluating prompt...</p>
+      <p id="loadingText">Evaluating prompt...</p>
     </section>
 
     <!-- Error Display -->
-    <section id="errorMessage" class="card fade-in error-box" style="display: none;">
-      <div class="card-title"><i class="icon-alert-triangle"></i> Prompt Rejected</div>
-      <p id="errorContent" class="error-text" style="margin-top: 10px; font-size: 16px; color: #c0392b;">
-        <!-- Error message will be injected here -->
-      </p>
+    <section id="errorBox" class="card fade-in error-box hidden">
+      <div class="card-title"><i class="icon-alert-triangle"></i> <span id="errorTitle">Prompt Rejected</span></div>
+      <p id="errorContent" class="error-text"></p>
     </section>
 
-    <!-- Prompt Evaluation Result -->
-    <section id="result" class="card fade-in">
+    <!-- Prompt Evaluation -->
+    <section id="result" class="card fade-in hidden">
       <div class="card-title"><i class="icon-clipboard"></i> Prompt Evaluation</div>
       <div class="score-header">
         <div class="score-display">
@@ -87,19 +90,21 @@
           <div id="scoreBar" class="score-bar"></div>
         </div>
       </div>
-      <!-- Criteria List -->
       <div class="criteria-list" id="criteriaList"></div>
-      <!-- Suggestions -->
       <div class="suggestions">
         <div class="suggestions-title"><i class="icon-lightbulb"></i> Suggestion for Improvement</div>
         <div id="suggestionsContent"></div>
       </div>
     </section>
 
-    <!-- Improved Prompt Example -->
+    <!-- Optimized Prompt -->
     <section class="card fade-in info-box">
       <div class="info-title"><i class="icon-refresh-cw"></i> Optimized Prompt</div>
       <textarea id="improvedPrompt" class="improved-prompt-textbox" readonly></textarea>
+      <p id="optimizedPromptNote" style="font-size: 0.9em; color: #999; margin-top: 6px;">
+        📌 <strong>Note:</strong> To evaluate this version, copy and paste it into the input box above and click <em>Evaluate</em>.
+        If the prompt exceeds 500 characters, it cannot be evaluated.
+      </p>
     </section>
 
     <!-- LLM Compatibility -->
@@ -109,7 +114,7 @@
       <div class="model-list" id="modelList">
         <div class="model-card">
           <div class="model-icon">
-            <img src="/static/llama.png" alt="LLaMA 3 logo" style="height:32px; width:auto; vertical-align:middle;" />
+            <img src="/static/llama.png" alt="LLaMA 3 logo" class="model-img" />
           </div>
           <div class="model-name">LLaMA 3</div>
           <div class="model-desc">Meta’s open-source model</div>
@@ -117,11 +122,10 @@
       </div>
     </section>
 
-    <!-- Evaluation Breakdown Chart -->
+    <!-- Radar Charts -->
     <section class="card fade-in chart-container">
       <canvas id="scoreChart" class="chart-canvas"></canvas>
     </section>
-
     <section class="card fade-in chart-container">
       <canvas id="criteriaRadarChart" class="chart-canvas"></canvas>
     </section>
@@ -139,7 +143,7 @@
   <!-- Toast -->
   <div id="toast" class="toast"></div>
 
-  <!-- JS Logic -->
-  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <!-- JS -->
+  <script src="/static/js/app.js" defer></script>
 </body>
 </html>

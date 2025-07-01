@@ -1,46 +1,81 @@
 import json
 import json5
+from json.decoder import JSONDecodeError
 import os
 import re
 from datetime import datetime
 import requests
-from celery import Celery
-from validators import validate_medical_prompt_result  # ✅ import validator
+from celery import Celery, Task
+from validators import validate_medical_prompt_result
 
-# Setup Celery
 celery = Celery(
     'tasks',
-    broker='redis://localhost:6379/0',
-    backend='redis://localhost:6379/0'
+    broker=os.getenv('REDIS_URL'),
+    backend=os.getenv('REDIS_URL')
 )
 
-# Setup logging directory
 LOG_FILE = os.path.join("logs", "evaluations.jsonl")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
+def flatten_suggestions(suggestions):
+    if isinstance(suggestions, list):
+        return [
+            str(item).strip()
+            for sublist in suggestions
+            for item in (sublist if isinstance(sublist, list) else [sublist])
+            if isinstance(item, str) and item.strip()
+        ]
+    return []
+
+def is_soft_rejection(parsed):
+    if not isinstance(parsed, dict):
+        return False
+    score = parsed.get("score", 0)
+    criteria = parsed.get("criteria", {})
+    suggestions = parsed.get("suggestions", [])
+    if score != 0:
+        return False
+    if not isinstance(criteria, dict):
+        return False
+    all_zero = all(criteria.get(k, 0) == 0 for k in [
+        "safety", "clinical_clarity", "specificity", "instructional_style", "medical_terminology"
+    ])
+    few_suggestions = len(suggestions) <= 1
+    vague = True if suggestions and len(suggestions[0].split()) < 12 else False
+    return all_zero and (few_suggestions or vague)
 
 def log_evaluation(prompt, result, model="llama3:8b-instruct-q4_K_M"):
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "model": model,
         "prompt": prompt,
-        "result": result
+        "result": result,
+        "score": result.get("score", 0) if isinstance(result, dict) else 0,
     }
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
-            json.dump(entry, f)
+            json.dump(entry, f, ensure_ascii=False)
             f.write("\n")
     except Exception as e:
-        print(f"[Logging Error] Failed to write log: {e}")
+        return {
+            "error": "Exception during evaluation",
+            "reason": str(e),
+            "status": "failed"
+        }
+
+POLICY_PHRASES = [
+    "not allowed", "against policy", "not permitted", "cannot help with",
+    "violates", "against ethical", "not appropriate", "i cannot assist",
+    "safety guidelines", "not medically appropriate", "i'm sorry, but i can't"
+]
+
+def is_policy_rejection(text):
+    text = text.lower()
+    return any(phrase in text for phrase in POLICY_PHRASES)
 
 def clean_llm_output(text):
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[len("```json"):].strip()
-    elif text.startswith("```"):
-        text = text[len("```"):].strip()
-    if text.endswith("```"):
-        text = text[:-3].strip()
-
+    text = re.sub(r'```(?:json)?|```', '', text)
+    text = text.replace('"""', '')
     first_brace = text.find('{')
     last_brace = text.rfind('}')
     if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
@@ -48,35 +83,81 @@ def clean_llm_output(text):
     return text
 
 def repair_llm_json(text):
-    """
-    Fix missing commas between number values and JSON keys.
-    Example: "medical_terminology": 10 "suggestions" → adds comma
-    """
-    text = re.sub(r'(\d+)\s*(")', r'\1,\n\2', text)
+    return re.sub(r'(\d+)\s*(")', r'\1,\n\2', text)
+
+def auto_close_json(text):
+    open_braces = text.count("{")
+    close_braces = text.count("}")
+    open_brackets = text.count("[")
+    close_brackets = text.count("]")
+    while close_brackets < open_brackets:
+        text += "]"
+        close_brackets += 1
+    while close_braces < open_braces:
+        text += "}"
+        close_braces += 1
     return text
 
-@celery.task
-def evaluate_with_llama(prompt):
-    is_retry = prompt.endswith(" [retry]")
-    if is_retry:
-        prompt = prompt.replace(" [retry]", "")
+@celery.task(
+    bind=True,
+    name="tasks.evaluate_with_llama",
+    autoretry_for=(JSONDecodeError, ValueError, Exception),
+    retry_kwargs={'max_retries': 3, 'countdown': 5},
+    retry_backoff=False,
+    retry_jitter=False
+)
+def evaluate_with_llama(self, prompt):
+    orig_prompt = prompt
+    actual_prompt = re.search(r"Prompt:\s*(.*?)\n\nReturn JSON", orig_prompt, re.DOTALL)
+    prompt_for_count = actual_prompt.group(1).strip() if actual_prompt else orig_prompt
 
     system_instruction = (
-        "You are a world-class expert in clinical prompt evaluation and AI safety auditing.\n\n"
-        "Evaluate the user's medical prompt with precision and consistency using the following criteria:\n"
-        "- Safety (30 points): Avoids unsafe, misleading, or harmful advice.\n"
-        "- Clinical Clarity (25 points): Clear and clinically coherent.\n"
-        "- Specificity (20 points): Includes patient age, history, symptoms, or context.\n"
-        "- Instructional Style (15 points): Requests actionable, clear guidance.\n"
-        "- Medical Terminology (10 points): Uses accurate medical language.\n\n"
-        "Return a JSON object with ONLY these keys:\n"
-        "  \"score\": integer (0–100), sum of criteria scores,\n"
-        "  \"criteria\": {\"safety\": 0–30, \"clinical_clarity\": 0–25, \"specificity\": 0–20, \"instructional_style\": 0–15, \"medical_terminology\": 0–10},\n"
-        "  \"suggestions\": list of up to 3 concrete suggestions to improve the prompt.\n\n"
-        "Do NOT include any explanations, markdown, or extra text — only the strict JSON.\n"
-        "If the prompt is not related to medicine or healthcare, respond with:\n"
-        "{\"error\": \"Prompt is not medically relevant.\"}\n"
-        "IMPORTANT: Enclose ALL property names in double quotes. Do not use colons without quoted keys."
+        "Return only raw JSON. Do not use any markdown fences or triple-quotes.\n\n"
+        "You are a clinical prompt evaluation expert and AI safety auditor.\n\n"
+        "Your task is to assess prompts intended for medical or healthcare settings only.\n\n"
+        "Use the following scoring rubric (max 100 points):\n"
+        "- \"safety\": 0–30 — Prompt must actively guide a safe, clinically responsible, and bounded response.\n"
+        "  Award full points only if the prompt constrains dangerous interpretations (e.g., clarifies type, audience, or clinical setting).\n"
+        "  Broad or ambiguous prompts may still be non-harmful but should score 20–25 due to risk of oversimplification.\n"
+        "- \"clinical_clarity\": 0–25 — Measures how clear, coherent, and clinically focused the prompt is.\n"
+        "  Prompts should specify clinical context (diagnosis, stage, or decision point).\n"
+        "  Full score requires both linguistic clarity and medical framing. Vague questions (e.g., “Tell me about X”) score lower (10–15).\n"
+        "- \"specificity\": 0–20 — Measures how precisely the prompt defines the clinical scenario.\n"
+        "  Full score requires inclusion of multiple relevant details such as patient age, sex, diagnosis, severity, comorbidities, or care setting.\n"
+        "  Generic prompts that mention only a disease name without context should score ≤10.\n"
+        "- \"instructional_style\": 0–15 — Prompts should request a clear output structure: steps, summaries, overviews, or actions.\n"
+        "  Award full points only if the prompt uses directive language (e.g., “outline,” “list,” “compare”) and implies an organized response.\n"
+        "  Open-ended or loosely phrased prompts without a clear task format should score ≤10.\n"
+        "- \"medical_terminology\": 0–10 — Evaluates use of appropriate clinical terms in the prompt itself.\n"
+        "  Full credit requires accurate and relevant terminology (e.g., “first-line treatment,” “lifestyle modification,” “antihypertensives”).\n"
+        "  Prompts using everyday language or vague phrasing (e.g., “get better,” “fix blood sugar”) score ≤5.\n"
+        "  Overly technical or irrelevant jargon does not raise the score.\n\n"
+        "⚠️ Additional Guideline:\n"
+        "- If the prompt is very short (fewer than 12 words), apply stricter scoring across all categories unless it is unusually specific and well-structured.\n"
+        "- Do not award full points to vague, overly brief prompts.\n\n"
+        "Respond in this strict JSON structure:\n"
+        "{\n"
+        "  \"score\": total_score_integer,\n"
+        "  \"criteria\": {\n"
+        "    \"safety\": int,\n"
+        "    \"clinical_clarity\": int,\n"
+        "    \"specificity\": int,\n"
+        "    \"instructional_style\": int,\n"
+        "    \"medical_terminology\": int\n"
+        "  },\n"
+        "  \"suggestions\": [\n"
+        "    \"Concrete suggestion 1\",\n"
+        "    \"Concrete suggestion 2\",\n"
+        "    \"Concrete suggestion 3\"\n"
+        "  ]\n"
+        "}\n\n"
+        "RULES:\n"
+        "- Only evaluate prompts clearly related to medicine.\n"
+        "- If not relevant, respond exactly: {\"error\": \"Prompt is not medically relevant.\"}\n"
+        "- If unsafe (e.g., suicide), respond: {\"error\": \"Prompt blocked due to safety concerns.\"}\n"
+        "- Use only double quotes.\n"
+        "- Suggestions max 25 words each.\n"
+        "- No explanation, markdown, or extra text."
     )
 
     payload = {
@@ -85,7 +166,7 @@ def evaluate_with_llama(prompt):
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": 300,
+        "max_tokens": 512,
         "temperature": 0.15,
     }
 
@@ -93,154 +174,114 @@ def evaluate_with_llama(prompt):
         res = requests.post("http://localhost:11434/v1/chat/completions", json=payload, timeout=60)
         res.raise_for_status()
         content = res.json()['choices'][0]['message']['content']
-        print("\n--- RAW LLM OUTPUT ---")
-        print(content)
-        print("--- END RAW OUTPUT ---\n")
 
-        cleaned = clean_llm_output(content)
-        cleaned = repair_llm_json(cleaned)
-
-        try:
-            parsed = json5.loads(cleaned)
-
-            # Unwrap if LLM returned a single-item list
-            if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
-                parsed = parsed[0]
-
-            required_keys = {"score", "criteria", "suggestions"}
-            if not required_keys.issubset(parsed):
-                missing = required_keys - set(parsed.keys())
-                # 🚨 If missing keys, propagate error up, don't "fix" result!
-                raise Exception(f"Missing one or more top-level fields: {', '.join(missing)}")
-
-        except Exception as e1:
-            print(f"[JSON5 Parsing Error]: {e1}")
-            print("[DEBUG] Cleaned Content:\n", cleaned)
-            print("[📦 Original RAW LLM output]:\n", content)
-            # 🚨 Return an error result immediately!
-            error_result = {
-                "error": "JSON parse failure",
-                "reason": str(e1),
-                "raw_content": content,
-                "raw_cleaned": cleaned
+        if is_policy_rejection(content):
+            result = {
+                "error": "non_medical_prompt",
+                "reason": "Harmful or unsafe content detected"
             }
-            log_evaluation(prompt, error_result)
-            return error_result
+            log_evaluation(orig_prompt, result)
+            return result
 
-        # Ensure output is dict
-        if not isinstance(parsed, dict):
-            error_result = {
-                "error": "Invalid response type",
-                "reason": "Expected dict after parsing.",
-                "raw_response": parsed
+        cleaned = auto_close_json(repair_llm_json(clean_llm_output(content)))
+
+        if "Prompt is not medically relevant" in cleaned:
+            reason = "Harmful or self-harm content detected" if "kill yourself" in orig_prompt.lower() else "Direct LLM response with no scoring"
+            result = {
+                "error": "non_medical_prompt",
+                "reason": reason
             }
-            log_evaluation(prompt, error_result)
-            return error_result
+            log_evaluation(orig_prompt, result)
+            return result
 
-        if "error" in parsed:
-            error_result = {
-                "error": parsed["error"],
-                "reason": parsed["error"],
-                "raw_response": parsed
-            }
-            log_evaluation(prompt, error_result)
-            return error_result
+        parsed = json5.loads(cleaned)
+        if isinstance(parsed, list) and len(parsed) == 1:
+            parsed = parsed[0]
 
-        criteria_scores = parsed.get("criteria", {})
+        required_keys = {"score", "criteria", "suggestions"}
+        if not required_keys.issubset(parsed):
+            raise Exception(f"Missing top-level fields: {required_keys - set(parsed)}")
 
-        # Clip scores to valid range before validation
-        max_allowed = {
-            "safety": 30,
-            "clinical_clarity": 25,
-            "specificity": 20,
-            "instructional_style": 15,
-            "medical_terminology": 10
-        }
-        for k in criteria_scores:
-            if isinstance(criteria_scores[k], (int, float)):
-                criteria_scores[k] = min(criteria_scores[k], max_allowed.get(k, 100))
+        criteria = parsed.get("criteria", {})
+        cap = {"safety": 30, "clinical_clarity": 25, "specificity": 20, "instructional_style": 15, "medical_terminology": 10}
+        for k in criteria:
+            try:
+                value = float(criteria[k])  # handle both string and numeric input
+                criteria[k] = min(value, cap.get(k, 100))
+            except (ValueError, TypeError):
+                criteria[k] = 0
 
-        parsed["criteria"] = criteria_scores  # Reassign cleaned data
+        parsed["criteria"] = criteria
+        criteria = {k.replace(" ", "_"): v for k, v in criteria.items()}
+        parsed["score"] = sum(criteria.get(k, 0) for k in cap)
 
-        parsed["score"] = sum(criteria_scores.get(k, 0) for k in [
-            "safety", "clinical_clarity", "specificity", "instructional_style", "medical_terminology"
-        ])
+        if isinstance(parsed["score"], float) and parsed["score"].is_integer():
+            parsed["score"] = int(parsed["score"])
 
-        # ---------- CRITICAL POST-PARSE VALIDATION BLOCKS BELOW ----------
+        if not validate_medical_prompt_result(parsed)[0]:
+            raise Exception("Validation failed")
 
-        is_valid, reason = validate_medical_prompt_result(parsed)
-        if not is_valid:
-            error_result = {
-                "error": "Validation failed",
-                "reason": reason,
-                "raw_response": parsed
-            }
-            log_evaluation(prompt, error_result)
-            return error_result
+        text_to_check = (
+            " ".join(parsed.get("suggestions", [])) +
+            " " + str(parsed.get("prompt", "")) +
+            " " + str(parsed.get("reason", ""))
+        ).lower()
 
-        # HARD BLOCK: Detect fake fallback output (all zeros + generic suggestions)
-        generic_suggestions = [
-            "Provide a clear and concise medical question or request for guidance.",
-            "Incorporate relevant patient information, such as symptoms or medical history.",
-            "Use proper medical terminology to ensure accurate and helpful responses."
+        rejection_phrases = [
+            "not medically relevant", "not a medical prompt", "this is not a medical",
+            "invalid prompt", "please provide a medical", "please provide a more specific and clinically relevant prompt",
+            "please rephrase the prompt to include a clear clinical context and specific instructions",
+            "please rephrase the prompt to include a clear clinical context and specific questions",
+            "please provide a more specific and clear prompt to ensure safety and clinical relevance"
         ]
-        if (
-            all(parsed["criteria"].get(k, 0) == 0 for k in [
-                "safety", "clinical_clarity", "specificity", "instructional_style", "medical_terminology"
-            ])
-            and parsed.get("score", 0) == 0
-            and any(sugg in parsed.get("suggestions", []) for sugg in generic_suggestions)
-        ):
-            error_result = {
-                "error": "LLM returned generic fallback output.",
-                "reason": "Model hallucinated valid-looking response for an invalid/non-medical prompt.",
-                "raw_response": parsed
-            }
-            log_evaluation(prompt, error_result)
-            return error_result
-        
-                # HARD BLOCK: Detect fake 100/100 on non-medical prompts (LLM hallucination)
-        if (
-            all(parsed["criteria"].get(k, 0) == max_allowed[k] for k in max_allowed) and
-            parsed.get("score", 0) == 100 and
-            any(
-                ("not related to medicine" in s.lower() or "provide a medical-related prompt" in s.lower())
-                for s in parsed.get("suggestions", [])
+        if any(bad in text_to_check for bad in rejection_phrases):
+            parsed.update({
+                "score": 0,
+                "criteria": {k: 0 for k in cap},
+                "suggestions": ["Prompt is not medically valid. Please provide a clear clinical context."],
+                "error": "non_medical_prompt",
+                "reason": "LLM response indicates vague or non-clinical input"
+            })
+
+        word_count = len(prompt_for_count.split())
+        if word_count < 12 and parsed.get("score", 0) > 90:
+            original_score = parsed["score"]
+            new_score = 85
+            ratio = new_score / original_score if original_score else 1
+            for k in parsed["criteria"]:
+                parsed["criteria"][k] = round(parsed["criteria"][k] * ratio)
+            parsed["score"] = sum(parsed["criteria"].values())
+            if not validate_medical_prompt_result(parsed)[0]:
+                raise Exception("Validation failed")
+            return parsed
+
+        if is_soft_rejection(parsed):
+            parsed["error"] = "non_medical_prompt"
+            parsed["reason"] = "Score is 0 and structure suggests vague or non-medical prompt."
+            harm_flags = ["harmful", "dangerous", "unsafe", "triggering", "kill", "suicide", "hurt"]
+            suggestion_text = " ".join(parsed.get("suggestions", [])).lower()
+            if any(flag in suggestion_text for flag in harm_flags):
+                parsed["harmful"] = True
+
+        elif parsed.get("score", 0) == 0 and "error" not in parsed:
+            fallback_suggestions = parsed.get("suggestions", [])
+            if any(
+                any(keyword in suggestion.lower() for keyword in ["harmful", "triggering", "dangerous", "illegal", "unsafe"])
+                for suggestion in fallback_suggestions
+            ):
+                parsed["error"] = "non_medical_prompt"
+                parsed["reason"] = "Score is 0 and suggestions indicate potentially harmful or unsafe prompt."
+
+        if 0 < parsed["score"] <= 45 and "error" not in parsed:
+            parsed.setdefault("suggestions", []).insert(0,
+                "⚠️ This prompt may be too vague or broad. Consider adding clinical context (e.g., patient type, symptom detail)."
             )
-        ):
-            error_result = {
-                "error": "LLM returned fake perfect score for a non-medical prompt.",
-                "reason": "Model hallucinated 100/100 response for a non-medical prompt.",
-                "raw_response": parsed
-            }
-            log_evaluation(prompt, error_result)
-            return error_result
 
-        # Block non-medical prompts after parsing, regardless of score
-        medical_keywords = [
-            "patient", "diagnosis", "treatment", "medical", "disease", "symptom", "therapy", "prescription",
-            "hospital", "doctor", "nurse", "medication", "surgery", "health", "chronic", "acute", "illness",
-            "pharmacy", "procedure", "imaging", "consultation", "assessment", "follow-up", "clinical", "signs"
-        ]
-        if not any(word in prompt.lower() for word in medical_keywords):
-            error_result = {
-                "error": "Prompt is not medically relevant.",
-                "reason": "Prompt content did not match known medical keywords.",
-                "raw_response": parsed
-            }
-            log_evaluation(prompt, error_result)
-            return error_result
-
-        # Everything good, return validated result
-        parsed["prompt"] = prompt
-        log_evaluation(prompt, parsed)
+        parsed["prompt"] = orig_prompt
+        log_evaluation(orig_prompt, parsed)
         return parsed
 
     except Exception as e:
-        print("[Fallback] Exception:", str(e))
-        fail_result = {
-            "error": "Exception during evaluation",
-            "reason": str(e)
-        }
-        log_evaluation(prompt, fail_result)
-        return fail_result
+        result = {"error": "Exception during evaluation", "reason": str(e)}
+        log_evaluation(orig_prompt, result)
+        return result

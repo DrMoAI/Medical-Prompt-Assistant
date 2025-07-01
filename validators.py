@@ -1,25 +1,34 @@
 def validate_medical_prompt_result(parsed, tolerance=1):
     """
     Validates LLM evaluation output for correct structure, types, and scoring.
-    - parsed: dict from LLM JSON output
-    - tolerance: int, allowed score difference (default: 1)
     Returns (True, "") if valid, (False, "reason") if not.
+    Accepts structured scores OR error objects.
     """
+
     # 1. Top-level type check
     if not isinstance(parsed, dict):
         return False, "Result is not a valid JSON object."
 
-    # 2. Must have all 3 required keys
+    # 2. Accept error-based rejections
+    if "error" in parsed:
+        allowed_errors = {
+            "Prompt is not medically relevant.",
+            "Prompt blocked due to safety concerns.",
+        }
+        if parsed["error"] in allowed_errors:
+            return True, ""
+        return False, f"Unrecognized error message: {parsed['error']}"
+
+    # 3. Must have all 3 required keys for evaluation result
     for key in ("score", "criteria", "suggestions"):
         if key not in parsed:
             return False, f"Missing top-level field: '{key}'."
 
-    # 3. Criteria type
+    # 4. Criteria type and structure
     criteria = parsed["criteria"]
     if not isinstance(criteria, dict):
         return False, "Field 'criteria' must be a dict."
 
-    # 4. Each expected criterion present, correct type and range
     expected = {
         "safety": 30,
         "clinical_clarity": 25,
@@ -32,7 +41,6 @@ def validate_medical_prompt_result(parsed, tolerance=1):
         if name not in criteria:
             return False, f"Missing criterion: '{name}'."
         val = criteria[name]
-        # Try to cast clean float or string to int
         if isinstance(val, float) and val.is_integer():
             val = int(val)
         elif isinstance(val, str) and val.isdigit():
@@ -48,7 +56,7 @@ def validate_medical_prompt_result(parsed, tolerance=1):
     if abs(score - total) > tolerance:
         return False, f"Reported score {score} does not match sum {total} (tolerance {tolerance})."
 
-    # 6. Suggestions: must be a list of non-empty strings
+    # 6. Suggestions
     suggestions = parsed["suggestions"]
     if not isinstance(suggestions, list):
         return False, "Field 'suggestions' must be a list."

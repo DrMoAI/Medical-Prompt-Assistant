@@ -1,44 +1,53 @@
-# Python virtual environment
+# Python
 venv/
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.pyd
 
-# Logs and database
-*.log
+# Logs and artifacts
 logs/
-logs.json
-logs.jsonl
+*.log
+*.jsonl
+*.json
 ollama.log
+batch_test_results.json
 evaluations.jsonl
 
-# Test and cache
+# Prompt test sets
+prompt_batches/
+test/test_prompts_*.json
+
+# Tests and dev scripts
 .pytest_cache/
 BENCHMARKS/
 test_*.py
 validators_backup.py
+patch_test.py
 
-# Environment variables
+# Secrets
 .env
 *.env
 
-# Node/JS artifacts (if any)
+# Node/JS artifacts
 node_modules/
 *.js.map
 
-# VS Code settings (optional)
+# Editor / IDE settings
 .vscode/
 *.code-workspace
 
-# Static files backups
+# Backup CSS or temp files
 static/css/styles.backup.css
 
-# Screenshot or export folders
+# Screenshots or exported visuals
 Screenshot/
 screenshots/
+*.png
 
-# Misc
+# System/OS
 .DS_Store
 Thumbs.db
+CACHEDIR.TAG
 
+# Misc
+.v

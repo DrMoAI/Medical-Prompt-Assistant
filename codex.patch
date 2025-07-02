@@ -1,0 +1,466 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/celery_worker.py b/celery_worker.py
+index 12f5d6d39f35936ac61915507b500ce7681e7a72..471a1ff43e0853c0550908e15c75b91d6e532da5 100644
+--- a/celery_worker.py
++++ b/celery_worker.py
+@@ -185,96 +185,94 @@ def evaluate_with_llama(self, prompt):
+ 
+         cleaned = auto_close_json(repair_llm_json(clean_llm_output(content)))
+ 
+         if "Prompt is not medically relevant" in cleaned:
+             reason = "Harmful or self-harm content detected" if "kill yourself" in orig_prompt.lower() else "Direct LLM response with no scoring"
+             result = {
+                 "error": "non_medical_prompt",
+                 "reason": reason
+             }
+             log_evaluation(orig_prompt, result)
+             return result
+ 
+         parsed = json5.loads(cleaned)
+         if isinstance(parsed, list) and len(parsed) == 1:
+             parsed = parsed[0]
+ 
+         required_keys = {"score", "criteria", "suggestions"}
+         if not required_keys.issubset(parsed):
+             raise Exception(f"Missing top-level fields: {required_keys - set(parsed)}")
+ 
+         criteria = parsed.get("criteria", {})
+         cap = {"safety": 30, "clinical_clarity": 25, "specificity": 20, "instructional_style": 15, "medical_terminology": 10}
+         for k in criteria:
+             try:
+                 value = float(criteria[k])  # handle both string and numeric input
+-                criteria[k] = min(value, cap.get(k, 100))
++                criteria[k] = int(min(value, cap.get(k, 100)))
+             except (ValueError, TypeError):
+                 criteria[k] = 0
+ 
+         parsed["criteria"] = criteria
+         criteria = {k.replace(" ", "_"): v for k, v in criteria.items()}
+-        parsed["score"] = sum(criteria.get(k, 0) for k in cap)
+-
+-        if isinstance(parsed["score"], float) and parsed["score"].is_integer():
+-            parsed["score"] = int(parsed["score"])
++        parsed["score"] = int(sum(criteria.get(k, 0) for k in cap))
+ 
+         if not validate_medical_prompt_result(parsed)[0]:
+             raise Exception("Validation failed")
+ 
+         text_to_check = (
+             " ".join(parsed.get("suggestions", [])) +
+             " " + str(parsed.get("prompt", "")) +
+             " " + str(parsed.get("reason", ""))
+         ).lower()
+ 
+         rejection_phrases = [
+             "not medically relevant", "not a medical prompt", "this is not a medical",
+             "invalid prompt", "please provide a medical", "please provide a more specific and clinically relevant prompt",
+             "please rephrase the prompt to include a clear clinical context and specific instructions",
+             "please rephrase the prompt to include a clear clinical context and specific questions",
+             "please provide a more specific and clear prompt to ensure safety and clinical relevance"
+         ]
+         if any(bad in text_to_check for bad in rejection_phrases):
+             parsed.update({
+                 "score": 0,
+                 "criteria": {k: 0 for k in cap},
+                 "suggestions": ["Prompt is not medically valid. Please provide a clear clinical context."],
+                 "error": "non_medical_prompt",
+                 "reason": "LLM response indicates vague or non-clinical input"
+             })
+ 
+         word_count = len(prompt_for_count.split())
+         if word_count < 12 and parsed.get("score", 0) > 90:
+             original_score = parsed["score"]
+             new_score = 85
+             ratio = new_score / original_score if original_score else 1
+             for k in parsed["criteria"]:
+                 parsed["criteria"][k] = round(parsed["criteria"][k] * ratio)
+             parsed["score"] = sum(parsed["criteria"].values())
+             if not validate_medical_prompt_result(parsed)[0]:
+                 raise Exception("Validation failed")
++            log_evaluation(orig_prompt, parsed)
+             return parsed
+ 
+         if is_soft_rejection(parsed):
+             parsed["error"] = "non_medical_prompt"
+             parsed["reason"] = "Score is 0 and structure suggests vague or non-medical prompt."
+             harm_flags = ["harmful", "dangerous", "unsafe", "triggering", "kill", "suicide", "hurt"]
+             suggestion_text = " ".join(parsed.get("suggestions", [])).lower()
+             if any(flag in suggestion_text for flag in harm_flags):
+                 parsed["harmful"] = True
+ 
+         elif parsed.get("score", 0) == 0 and "error" not in parsed:
+             fallback_suggestions = parsed.get("suggestions", [])
+             if any(
+                 any(keyword in suggestion.lower() for keyword in ["harmful", "triggering", "dangerous", "illegal", "unsafe"])
+                 for suggestion in fallback_suggestions
+             ):
+                 parsed["error"] = "non_medical_prompt"
+                 parsed["reason"] = "Score is 0 and suggestions indicate potentially harmful or unsafe prompt."
+ 
+         if 0 < parsed["score"] <= 45 and "error" not in parsed:
+             parsed.setdefault("suggestions", []).insert(0,
+                 "⚠️ This prompt may be too vague or broad. Consider adding clinical context (e.g., patient type, symptom detail)."
+             )
+ 
+         parsed["prompt"] = orig_prompt
+diff --git a/static/js/app.js b/static/js/app.js
+index a9160734151700a006a96fae88743dcb0b03e5c4..087e64824a8de03e1963dfafb63ad04a363a23b0 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -79,50 +79,55 @@ function hideErrorMessage() {
+     box.classList.add("hidden");
+   }
+   if (content) content.textContent = "";
+   if (cardTitle) cardTitle.textContent = "";
+ }
+ 
+ function renderResults(result) {
+   const score = parseInt(result.score);
+   const criteria_scores = result.criteria || {};
+   const suggestions = Array.isArray(result.suggestions) ? result.suggestions : [];
+ 
+   renderChart({ score: score, criteria_scores: criteria_scores });
+   renderRadarChart(criteria_scores);
+ 
+   document.getElementById('suggestionsContent').innerHTML =
+     suggestions.map(s => `<p>${escapeHTML(s)}</p>`).join('');
+   document.getElementById('llmFeedback').innerText = 'Evaluated by local LLM';
+ 
+   const resultBox = document.getElementById('result');
+   if (resultBox) {
+     resultBox.classList.remove('hidden');
+     resultBox.classList.add('visible');
+   }
+ }
+ 
++function renderCharts(scoreData, criteriaData) {
++  if (scoreData) renderChart(scoreData);
++  if (criteriaData) renderRadarChart(criteriaData);
++}
++
+ // ================== GLOBAL FUNCTION ==================
+ function toggleDarkMode() {
+   document.body.classList.toggle("dark-mode");
+   const toggleState = document.body.classList.contains("dark-mode");
+   localStorage.setItem("darkMode", toggleState ? "enabled" : "disabled");
+   refreshCharts();
+ }
+ 
+ // ================== EVALUATION FLOW ==================
+ async function evaluateWithBackend(prompt) {
+   const response = await fetch('/api/async_evaluate', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ prompt })
+   });
+   if (!response.ok) throw new Error(`Submit error: ${response.status}`);
+   const { task_id } = await response.json();
+   return pollTaskStatus(task_id);
+ }
+ 
+ async function pollTaskStatus(taskId) {
+   const maxAttempts = 30;
+   const interval = 2000;
+   const delay = ms => new Promise(r => setTimeout(r, ms));
+   await delay(1000);
+@@ -327,50 +332,65 @@ function renderRadarChart(criteriaScores) {
+             color: angleLineColor
+           }
+         }
+       }
+     }
+   });
+ }
+ 
+ function refreshCharts() {
+   if (lastScoreData) renderChart(lastScoreData);
+   if (lastCriteriaData) renderRadarChart(lastCriteriaData);
+ }
+ 
+ // ================== EVALUATION HANDLER ==================
+ window.addEventListener('DOMContentLoaded', () => {
+   const savedMode = localStorage.getItem("darkMode");
+   const darkToggle = document.getElementById("darkModeToggle");
+   if (savedMode === "enabled") {
+     document.body.classList.add("dark-mode");
+     if (darkToggle) darkToggle.checked = true;
+   }
+   if (darkToggle) {
+     darkToggle.addEventListener("change", toggleDarkMode);
+   }
+ 
++  const storedScore = localStorage.getItem('lastScore');
++  const storedCriteria = localStorage.getItem('lastCriteria');
++  if (storedScore && storedCriteria) {
++    try {
++      const criteriaData = JSON.parse(storedCriteria);
++      const scoreData = { score: parseInt(storedScore, 10), criteria_scores: criteriaData };
++      renderCharts(scoreData, criteriaData);
++    } catch (e) {
++      localStorage.removeItem('lastScore');
++      localStorage.removeItem('lastCriteria');
++    }
++  }
++
++  renderHistory();
++
+   const promptInput = document.getElementById('prompt');
+   const charCount = document.getElementById('charCount');
+   if (promptInput && charCount) {
+     promptInput.addEventListener('input', () => {
+       charCount.innerText = `${promptInput.value.length}/500`;
+     });
+   }
+ 
+   document.getElementById('prompt').addEventListener('input', () => {
+     const value = document.getElementById('prompt').value;
+     document.getElementById('charCount').innerText = `${value.length}/500`;
+   });
+ 
+   document.getElementById('clearInputBtn').onclick = () => {
+     document.getElementById('prompt').value = '';
+     document.getElementById('charCount').innerText = '0/500';
+     clearResults();
+   };
+ 
+   document.getElementById('improvePromptBtn').onclick = async () => {
+     const prompt = document.getElementById('prompt').value.trim();
+     if (!prompt) return alert('Please enter a prompt first.');
+ 
+     document.getElementById('loadingText').innerText = 'Optimizing prompt...';
+     document.getElementById('loading').style.display = 'block';
+@@ -391,123 +411,135 @@ window.addEventListener('DOMContentLoaded', () => {
+           optimizedBox.scrollIntoView({ behavior: 'smooth' });
+         }
+       } else {
+         alert('Prompt improvement failed.');
+       }
+     } catch (e) {
+       alert('Server error during prompt improvement.');
+     } finally {
+       document.getElementById('loading').style.display = 'none';
+       document.getElementById('loadingText').innerText = 'Evaluating prompt...';
+     }
+   };
+ 
+   document.getElementById('loadExampleBtn').onclick = () => {
+     const example = "Explain the recommended treatment for a newly diagnosed diabetic patient with hypertension.";
+     document.getElementById('prompt').value = example;
+     document.getElementById('charCount').innerText = `${example.length}/500`;
+   };
+ 
+   document.getElementById('evaluateBtn').onclick = async () => {
+     hideErrorMessage();
+     disableUI();
+     clearResults();
+ 
+     const prompt = document.getElementById('prompt').value.trim();
+-    if (!prompt) return alert('Please enter a prompt');
+-    if (prompt.length > 500) return alert('Keep prompt under 500 characters');
++    if (!prompt) {
++      document.getElementById('loading').style.display = 'none';
++      enableUI();
++      return alert('Please enter a prompt');
++    }
++    if (prompt.length > 500) {
++      document.getElementById('loading').style.display = 'none';
++      enableUI();
++      return alert('Keep prompt under 500 characters');
++    }
+ 
+     document.getElementById('loading').style.display = 'block';
+ 
+     try {
+       const result = await evaluateWithBackend(prompt);
+ 
+       if (result.error === "non_medical_prompt") {
+         const friendlyMessage = "⚠️ Prompt rejected. Please include a clear medical topic like a symptom, condition, or treatment.";
+         showErrorMessage(friendlyMessage, "Prompt Rejected");
+         document.getElementById('result')?.classList.add('hidden');
+         document.getElementById('improvePromptBtn').disabled = true;
+         return;
+       }
+ 
+       if (result.error) {
+         const reason = result.reason || "";
+         let message = "⚠️ Prompt rejected. Please rephrase using a clear, safe, and medically relevant instruction.";
+ 
+         if (result.error === "non_medical_prompt") {
+           if (reason.toLowerCase().includes("harmful")) {
+             message = "🚫 This prompt was flagged as harmful or unsafe. Please rephrase with medically safe, respectful language.";
+           } else {
+             message = "⚠️ Prompt rejected for being vague, non-medical, or unclear.";
+           }
+         } else if (result.error === "Exception during evaluation" && reason.includes("Missing top-level fields")) {
+           message = "⚠️ Internal error: The LLM failed to return expected data. Try rewriting the prompt with clearer medical structure.";
+         } else if (reason) {
+           message = `⚠️ ${reason}`;
+         }
+ 
+         showErrorMessage(message, "Prompt Rejected");
+         document.getElementById('result')?.classList.add('hidden');
+         document.getElementById('improvePromptBtn').disabled = true;
+         return;
+       }
+ 
+       const score = parseInt(result.score);
+       const criteria_scores = result.criteria || {};
+       const suggestions = Array.isArray(result.suggestions) ? result.suggestions : [];
+ 
+       if (score === 0 && result.error === "non_medical_prompt") {
+         showErrorMessage(result.suggestions?.[0] || "Prompt rejected due to vague or non-medical input.", "Prompt Rejected");
+         clearResults();
+         document.getElementById('result')?.classList.add('hidden');
+         document.getElementById('improvePromptBtn').disabled = true;
+         return;
+       }
+ 
+       renderResults(result);
+-      
++      localStorage.setItem('lastScore', score);
++      localStorage.setItem('lastCriteria', JSON.stringify(criteria_scores));
++
+       if (!result || typeof result.score !== "number" || !result.criteria) return;
+       document.getElementById('improvePromptBtn').disabled = false;
+ 
+       promptHistory.unshift({ prompt, score });
+       promptHistory = promptHistory.slice(0, 10);
+       localStorage.setItem('promptHistory', JSON.stringify(promptHistory));
+-      updateHistoryUI();
++      renderHistory();
+     } catch (err) {
+       showErrorMessage(err.message || "Unexpected error occurred");
+     } finally {
+       document.getElementById('loading').style.display = 'none';
+       enableUI();
+     }
+   };
+ 
+-  function updateHistoryUI() {
++  function renderHistory() {
+     const list = document.getElementById('historyList');
+ 
+     if (promptHistory.length === 0) {
+-      list.innerHTML = `<li class="history-placeholder">No history yet.</li>`;
++      list.innerHTML = `<li class="history-placeholder">No previous prompts yet.</li>`;
+     } else {
+       list.innerHTML = promptHistory.map((entry, i) => {
+         const scoreClass = entry.score >= 90 ? 'excellent' :
+                           entry.score >= 75 ? 'good' :
+                           entry.score >= 60 ? 'fair' : 'poor';
+         return `
+           <li class="history-item ${scoreClass}" onclick="loadHistory(${i})">
+             <div class="history-index">#${i + 1}</div>
+             <div class="history-prompt">${escapeHTML(entry.prompt)}</div>
+             <div class="history-score">${entry.score}%</div>
+           </li>
+         `;
+       }).join('');
+     }
+ 
+     document.getElementById('history').style.display = 'block';
+   }
+ 
+   function loadHistory(index) {
+     const entry = promptHistory[index];
+     if (entry) {
+       document.getElementById('prompt').value = entry.prompt;
+-      document.getElementById('charCount').innerText = entry.prompt.length;
++      document.getElementById('charCount').innerText = `${entry.prompt.length}/500`;
+     }
+   }
++  window.loadHistory = loadHistory;
++  window.renderHistory = renderHistory;
+ });
+diff --git a/validators.py b/validators.py
+index d4f13be78e4e895ad72a1e2d7d3f5116d117ccb1..6aed6c3cfa36f77881d6a26a25997635d2d02039 100644
+--- a/validators.py
++++ b/validators.py
+@@ -1,69 +1,72 @@
+ def validate_medical_prompt_result(parsed, tolerance=1):
+     """
+     Validates LLM evaluation output for correct structure, types, and scoring.
+     Returns (True, "") if valid, (False, "reason") if not.
+     Accepts structured scores OR error objects.
+     """
+ 
+     # 1. Top-level type check
+     if not isinstance(parsed, dict):
+         return False, "Result is not a valid JSON object."
+ 
+     # 2. Accept error-based rejections
+     if "error" in parsed:
+         allowed_errors = {
+             "Prompt is not medically relevant.",
+             "Prompt blocked due to safety concerns.",
+         }
+-        if parsed["error"] in allowed_errors:
++        if parsed.get("error") in allowed_errors:
+             return True, ""
+-        return False, f"Unrecognized error message: {parsed['error']}"
++        return False, f"Unrecognized error message: {parsed.get('error')}"
+ 
+     # 3. Must have all 3 required keys for evaluation result
+     for key in ("score", "criteria", "suggestions"):
+         if key not in parsed:
+             return False, f"Missing top-level field: '{key}'."
+ 
+     # 4. Criteria type and structure
+-    criteria = parsed["criteria"]
++    criteria = parsed.get("criteria")
+     if not isinstance(criteria, dict):
+         return False, "Field 'criteria' must be a dict."
+ 
+     expected = {
+         "safety": 30,
+         "clinical_clarity": 25,
+         "specificity": 20,
+         "instructional_style": 15,
+         "medical_terminology": 10,
+     }
+     total = 0
+     for name, max_val in expected.items():
+         if name not in criteria:
+             return False, f"Missing criterion: '{name}'."
+-        val = criteria[name]
+-        if isinstance(val, float) and val.is_integer():
+-            val = int(val)
+-        elif isinstance(val, str) and val.isdigit():
+-            val = int(val)
+-        if not (isinstance(val, int) and 0 <= val <= max_val):
++        val = criteria.get(name)
++        try:
++            val = int(float(val))
++        except (TypeError, ValueError):
+             return False, f"Invalid score for '{name}': {val} (must be 0–{max_val})."
++        if not (0 <= val <= max_val):
++            return False, f"Invalid score for '{name}': {val} (must be 0–{max_val})."
++        criteria[name] = val
+         total += val
+ 
+     # 5. Score validation
+-    score = parsed["score"]
+-    if not isinstance(score, int):
++    score = parsed.get("score")
++    try:
++        score = int(score)
++    except (TypeError, ValueError):
+         return False, "Field 'score' must be an integer."
+     if abs(score - total) > tolerance:
+         return False, f"Reported score {score} does not match sum {total} (tolerance {tolerance})."
+ 
+     # 6. Suggestions
+-    suggestions = parsed["suggestions"]
++    suggestions = parsed.get("suggestions")
+     if not isinstance(suggestions, list):
+         return False, "Field 'suggestions' must be a list."
+     if not suggestions:
+         return False, "Suggestions list cannot be empty."
+     for idx, s in enumerate(suggestions):
+         if not (isinstance(s, str) and s.strip()):
+             return False, f"Suggestion at index {idx} must be a non-empty string."
+ 
+     return True, ""
+ 
+EOF
+)

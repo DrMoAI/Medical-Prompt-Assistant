@@ -101,6 +101,11 @@ function renderResults(result) {
   }
 }
 
+function renderCharts(scoreData, criteriaData) {
+  if (scoreData) renderChart(scoreData);
+  if (criteriaData) renderRadarChart(criteriaData);
+}
+
 // ================== GLOBAL FUNCTION ==================
 function toggleDarkMode() {
   document.body.classList.toggle("dark-mode");
@@ -349,6 +354,21 @@ window.addEventListener('DOMContentLoaded', () => {
     darkToggle.addEventListener("change", toggleDarkMode);
   }
 
+  const storedScore = localStorage.getItem('lastScore');
+  const storedCriteria = localStorage.getItem('lastCriteria');
+  if (storedScore && storedCriteria) {
+    try {
+      const criteriaData = JSON.parse(storedCriteria);
+      const scoreData = { score: parseInt(storedScore, 10), criteria_scores: criteriaData };
+      renderCharts(scoreData, criteriaData);
+    } catch (e) {
+      localStorage.removeItem('lastScore');
+      localStorage.removeItem('lastCriteria');
+    }
+  }
+
+  renderHistory();
+
   const promptInput = document.getElementById('prompt');
   const charCount = document.getElementById('charCount');
   if (promptInput && charCount) {
@@ -413,8 +433,16 @@ window.addEventListener('DOMContentLoaded', () => {
     clearResults();
 
     const prompt = document.getElementById('prompt').value.trim();
-    if (!prompt) return alert('Please enter a prompt');
-    if (prompt.length > 500) return alert('Keep prompt under 500 characters');
+    if (!prompt) {
+      document.getElementById('loading').style.display = 'none';
+      enableUI();
+      return alert('Please enter a prompt');
+    }
+    if (prompt.length > 500) {
+      document.getElementById('loading').style.display = 'none';
+      enableUI();
+      return alert('Keep prompt under 500 characters');
+    }
 
     document.getElementById('loading').style.display = 'block';
 
@@ -464,6 +492,8 @@ window.addEventListener('DOMContentLoaded', () => {
       }
 
       renderResults(result);
+      localStorage.setItem('lastScore', score);
+      localStorage.setItem('lastCriteria', JSON.stringify(criteria_scores));
       
       if (!result || typeof result.score !== "number" || !result.criteria) return;
       document.getElementById('improvePromptBtn').disabled = false;
@@ -471,7 +501,7 @@ window.addEventListener('DOMContentLoaded', () => {
       promptHistory.unshift({ prompt, score });
       promptHistory = promptHistory.slice(0, 10);
       localStorage.setItem('promptHistory', JSON.stringify(promptHistory));
-      updateHistoryUI();
+      renderHistory();
     } catch (err) {
       showErrorMessage(err.message || "Unexpected error occurred");
     } finally {
@@ -480,7 +510,15 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  function updateHistoryUI() {
+  function loadHistory(index) {
+    const entry = promptHistory[index];
+    if (entry) {
+      document.getElementById('prompt').value = entry.prompt;
+      document.getElementById('charCount').innerText = `${entry.prompt.length}/500`;
+    }
+  }
+
+  function renderHistory() {
     const list = document.getElementById('historyList');
 
     if (promptHistory.length === 0) {
@@ -491,23 +529,22 @@ window.addEventListener('DOMContentLoaded', () => {
                           entry.score >= 75 ? 'good' :
                           entry.score >= 60 ? 'fair' : 'poor';
         return `
-          <li class="history-item ${scoreClass}" onclick="loadHistory(${i})">
+          <li class="history-item ${scoreClass}" data-index="${i}">
             <div class="history-index">#${i + 1}</div>
             <div class="history-prompt">${escapeHTML(entry.prompt)}</div>
             <div class="history-score">${entry.score}%</div>
           </li>
         `;
       }).join('');
+
+      list.querySelectorAll('.history-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const idx = parseInt(item.dataset.index, 10);
+          loadHistory(idx);
+        });
+      });
     }
 
     document.getElementById('history').style.display = 'block';
-  }
-
-  function loadHistory(index) {
-    const entry = promptHistory[index];
-    if (entry) {
-      document.getElementById('prompt').value = entry.prompt;
-      document.getElementById('charCount').innerText = entry.prompt.length;
-    }
-  }
+  } 
 });

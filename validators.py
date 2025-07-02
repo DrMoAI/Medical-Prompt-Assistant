@@ -15,9 +15,9 @@ def validate_medical_prompt_result(parsed, tolerance=1):
             "Prompt is not medically relevant.",
             "Prompt blocked due to safety concerns.",
         }
-        if parsed["error"] in allowed_errors:
+        if parsed.get("error") in allowed_errors:
             return True, ""
-        return False, f"Unrecognized error message: {parsed['error']}"
+        return False, f"Unrecognized error message: {parsed.get('error')}"
 
     # 3. Must have all 3 required keys for evaluation result
     for key in ("score", "criteria", "suggestions"):
@@ -25,7 +25,7 @@ def validate_medical_prompt_result(parsed, tolerance=1):
             return False, f"Missing top-level field: '{key}'."
 
     # 4. Criteria type and structure
-    criteria = parsed["criteria"]
+    criteria = parsed.get("criteria")
     if not isinstance(criteria, dict):
         return False, "Field 'criteria' must be a dict."
 
@@ -40,24 +40,27 @@ def validate_medical_prompt_result(parsed, tolerance=1):
     for name, max_val in expected.items():
         if name not in criteria:
             return False, f"Missing criterion: '{name}'."
-        val = criteria[name]
-        if isinstance(val, float) and val.is_integer():
-            val = int(val)
-        elif isinstance(val, str) and val.isdigit():
-            val = int(val)
-        if not (isinstance(val, int) and 0 <= val <= max_val):
+        val = criteria.get(name)
+        try:
+            val = int(float(val))
+        except (TypeError, ValueError):
             return False, f"Invalid score for '{name}': {val} (must be 0–{max_val})."
+        if not (0 <= val <= max_val):
+            return False, f"Invalid score for '{name}': {val} (must be 0–{max_val})."
+        criteria[name] = val
         total += val
 
     # 5. Score validation
-    score = parsed["score"]
-    if not isinstance(score, int):
+    score = parsed.get("score")
+    try:
+        score = int(score)
+    except (TypeError, ValueError):
         return False, "Field 'score' must be an integer."
     if abs(score - total) > tolerance:
         return False, f"Reported score {score} does not match sum {total} (tolerance {tolerance})."
 
     # 6. Suggestions
-    suggestions = parsed["suggestions"]
+    suggestions = parsed.get("suggestions")
     if not isinstance(suggestions, list):
         return False, "Field 'suggestions' must be a list."
     if not suggestions:

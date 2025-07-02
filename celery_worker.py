@@ -207,16 +207,13 @@ def evaluate_with_llama(self, prompt):
         for k in criteria:
             try:
                 value = float(criteria[k])  # handle both string and numeric input
-                criteria[k] = min(value, cap.get(k, 100))
+                criteria[k] = int(min(value, cap.get(k, 100)))
             except (ValueError, TypeError):
                 criteria[k] = 0
 
         parsed["criteria"] = criteria
         criteria = {k.replace(" ", "_"): v for k, v in criteria.items()}
-        parsed["score"] = sum(criteria.get(k, 0) for k in cap)
-
-        if isinstance(parsed["score"], float) and parsed["score"].is_integer():
-            parsed["score"] = int(parsed["score"])
+        parsed["score"] = int(sum(criteria.get(k, 0) for k in cap))
 
         if not validate_medical_prompt_result(parsed)[0]:
             raise Exception("Validation failed")
@@ -253,6 +250,7 @@ def evaluate_with_llama(self, prompt):
             parsed["score"] = sum(parsed["criteria"].values())
             if not validate_medical_prompt_result(parsed)[0]:
                 raise Exception("Validation failed")
+            log_evaluation(orig_prompt, parsed)
             return parsed
 
         if is_soft_rejection(parsed):

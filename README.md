@@ -1,4 +1,4 @@
-# 🧪 Doctor’s Prompt Assistant
+# 🧪 Medical Prompt Assistant
 
 A web tool to evaluate and optimize medical prompts for Large Language Models (LLMs), with live scoring, visual feedback, and prompt history.  
 Supports light/dark mode, interactive radar charts, and quick prompt improvement.

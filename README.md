@@ -9,8 +9,8 @@ Supports light/dark mode, interactive radar charts, and quick prompt improvement
 
 - **Medical Prompt Evaluation:** Input a clinical prompt (max 500 chars) for scoring.
 - **Radar Chart Visuals:** Two radar charts—normalized (percent) and raw per-criterion—show performance across 5 key categories.
-- **Live Dark/Light Mode:** UI and charts instantly update colors on theme switch.
-- **Prompt Optimization:** Auto-improve any entered prompt with a single click.
+- **Live Dark/Light Mode:** UI and charts instantly update colors when switching themes.
+• Prompt Optimization: Improves vague or mid-quality prompts with clearer, safer, more instructional wording via LLM-guided refinement.
 - **History List:** Stores last 10 prompts and their scores; quick click-to-load.
 - **Responsive Mobile UI:** All components adapt for mobile and desktop.
 - **Robust Error Handling:** Themed error cards and toasts for any failures.

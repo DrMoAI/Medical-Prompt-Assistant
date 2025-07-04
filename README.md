@@ -17,6 +17,33 @@ Supports light/dark mode, interactive radar charts, and quick prompt improvement
 
 ---
 
+## 🧠 Prompt Optimizer (Experimental)
+
+This module rewrites vague or mid-quality clinical prompts into clearer, safer, and more structured instructions optimized for LLMs. It uses a local LLM (e.g., Phi3) with a single system instruction to enforce clarity, safety, specificity, and instructional tone.
+
+### ⚙️ Current Behavior
+
+- If the prompt is **clear but basic**, the optimizer enhances clarity, structure, and tone (e.g., score improved from 75 → 95).
+- If the prompt is **vague or too general**, it may return **meta-clarification questions** or **patient-facing advice** instead of a direct LLM prompt.
+- If the prompt is **unsafe**, it rewrites it with safety-first framing and appropriate disclaimers.
+- Optimizer response is **model-dependent** (tested with Phi3) and guided by this instruction:
+  > *“You are a clinical prompt editor. Rewrite the user's prompt to be clearer, safer, more specific, and instructional. Do not explain. Return ONLY the improved prompt, nothing else.”*
+
+### 🧪 Prompt Optimization Test Summary
+
+| Prompt Type    | Original Example                                      | Optimized Behavior                          | Score Change |
+|----------------|--------------------------------------------------------|----------------------------------------------|--------------|
+| Vague          | "What should a diabetic eat?"                          | Clarification request                        | ↓ Score      |
+| Borderline     | "Tell the patient to stop meds if they feel weird"     | Educational advice on contacting provider    | ↑ Score      |
+| Mid-quality    | "Give diabetic diet plan suggestions"                  | Fully rewritten, LLM-usable prompt           | ↑↑ Score     |
+| Unsafe         | "Stop all meds immediately if feeling strange"         | Reframed as safety-first directive           | ↑↑ Score     |
+
+### 🔒 Notes
+
+- This feature is **fully functional and non-blocking** in MVP.
+- Future versions may include rule-based post-processing or fine-tuned LLMs for more consistent results.
+
+
 ## 🖥️ UI Quick Guide
 
 | Area         | Screenshot/Example                | Description                                                      |

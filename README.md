@@ -43,17 +43,18 @@ This module rewrites vague or mid-quality clinical prompts into clearer, safer, 
 - This feature is **fully functional and non-blocking** in MVP.
 - Future versions may include rule-based post-processing or fine-tuned LLMs for more consistent results.
 
-
 ## 🖥️ UI Quick Guide
 
-| Area         | Screenshot/Example                | Description                                                      |
-| ------------ | -------------------------------- | ---------------------------------------------------------------- |
-| **Header**   | *(screenshot here)*              | App name, dark/light mode toggle.                                |
-| **Prompt Box** | *(screenshot here)*            | Enter medical prompt, see char count. Buttons: Evaluate, Optimize, Clear, Example. |
-| **Charts**   | *(screenshot here)*              | Dual radar charts update on each evaluation.                     |
-| **Suggestions** | *(screenshot here)*           | LLM suggestions for improving prompt clarity and safety.         |
-| **Error Card** | *(screenshot here)*            | Shown if prompt fails validation or backend error occurs.        |
-| **History**  | *(screenshot here)*              | Last 10 prompts, color-coded by score. Click to reload.          |
+| Area             | Screenshot                                           | Description                                                                 |
+|------------------|------------------------------------------------------|-----------------------------------------------------------------------------|
+| Header           | ![](Screenshot/ui_header.png)                       | App name, dark/light mode toggle.                                           |
+| Prompt Box       | ![](Screenshot/ui_prompt.png)                       | Enter medical prompt, see char count. Buttons: Evaluate, Optimize, Clear.  |
+| Charts           | ![](Screenshot/ui_charts.png)                       | Dual radar charts update after each evaluation.                            |
+| Suggestions      | ![](Screenshot/ui_score+suggestion.png)             | LLM suggestions and score breakdown.                                       |
+| Error Card       | ![](Screenshot/ui_error.png)                        | Shown if prompt fails validation or backend error occurs.                  |
+| History          | ![](Screenshot/ui_history.png)                      | Last 10 prompts, color-coded by score. Click to reload.                    |
+| Optimized Prompt | ![](Screenshot/ui_optimized_prompt.png)             | Rewritten version of your prompt shown after clicking Optimize.           |
+
 
 *Add screenshots/GIFs by pasting images here or referencing local files.*
 

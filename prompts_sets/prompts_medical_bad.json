@@ -1,0 +1,22 @@
+[
+  { "prompt": "Diabetes." },
+  { "prompt": "Asthma treatment?" },
+  { "prompt": "Help with medicine." },
+  { "prompt": "Explain high BP." },
+  { "prompt": "Advice for sick person." },
+  { "prompt": "Patient not feeling well." },
+  { "prompt": "Blood pressure advice?" },
+  { "prompt": "What to do for cough?" },
+  { "prompt": "Give me medical info." },
+  { "prompt": "Pain." },
+  { "prompt": "Hypertension?" },
+  { "prompt": "Medicine help." },
+  { "prompt": "Something about cholesterol." },
+  { "prompt": "Heart issue." },
+  { "prompt": "Best treatment?" },
+  { "prompt": "My patient is sick." },
+  { "prompt": "List diseases." },
+  { "prompt": "Pediatric problem." },
+  { "prompt": "Adult medicine?" },
+  { "prompt": "Sick person advice." }
+]

@@ -1,0 +1,22 @@
+[
+  { "prompt": "Summarize the diagnostic criteria for heart failure in adults." },
+  { "prompt": "List the contraindications for metformin therapy." },
+  { "prompt": "Explain the step-by-step management of acute asthma in a 5-year-old." },
+  { "prompt": "Describe the adverse effects of ACE inhibitors in elderly patients." },
+  { "prompt": "Outline a safe treatment plan for hypertension in pregnancy." },
+  { "prompt": "Summarize recommended vaccinations for adults with type 2 diabetes." },
+  { "prompt": "Describe initial workup for suspected pulmonary embolism." },
+  { "prompt": "List clinical features of nephrotic syndrome in children." },
+  { "prompt": "Provide counseling tips for smoking cessation in teenagers." },
+  { "prompt": "Explain the monitoring required for patients on warfarin." },
+  { "prompt": "Summarize key findings in chest x-ray for congestive heart failure." },
+  { "prompt": "Describe the initial management of diabetic ketoacidosis." },
+  { "prompt": "List causes of secondary hypertension." },
+  { "prompt": "Explain lifestyle modifications for hyperlipidemia." },
+  { "prompt": "Describe red flag symptoms for pediatric abdominal pain." },
+  { "prompt": "Outline steps for safe opioid prescribing in chronic pain." },
+  { "prompt": "Summarize best practices for antimicrobial stewardship." },
+  { "prompt": "Describe the diagnosis and management of COPD exacerbations." },
+  { "prompt": "List indications for statin therapy in adults." },
+  { "prompt": "Explain management options for osteoporosis in postmenopausal women." }
+]

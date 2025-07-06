@@ -1,30 +1,27 @@
 from flask import Flask, render_template, request, jsonify
-import re
-import json
-import os
-from dotenv import load_dotenv
-import requests
+import re, json, os, requests
 from datetime import datetime
+from dotenv import load_dotenv
 from celery_worker import evaluate_with_llama
 from validators import validate_medical_prompt_result
 
 load_dotenv()
 app = Flask(__name__)
 
+# ✅ Set secure content policy headers
 @app.after_request
 def apply_csp(response):
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "img-src 'self' data:; "
-        "connect-src 'self'; "
+        "img-src 'self' data:; connect-src 'self'; "
         "font-src 'self' https://cdn.jsdelivr.net; "
-        "object-src 'none'; "
-        "frame-ancestors 'none'; "
+        "object-src 'none'; frame-ancestors 'none'; "
     )
     return response
 
+# ✅ Append evaluation log to local file
 def write_log_entry(prompt, model, score):
     log_file_path = 'logs.jsonl'
     entry = {
@@ -36,6 +33,7 @@ def write_log_entry(prompt, model, score):
     with open(log_file_path, 'a', encoding='utf-8') as f:
         f.write(json.dumps(entry) + '\n')
 
+# ✅ Lightweight local regex-based evaluator (fast fallback)
 def regex_evaluate_prompt(prompt):
     criteria = {
         "clinical_clarity": {"pattern": r'\b(patient|symptom|diagnosis|condition|history)\b', "weight": 0.25},
@@ -57,14 +55,14 @@ def regex_evaluate_prompt(prompt):
     score = round(total * 100)
     return score, results, suggestions
 
+# === ROUTES ===
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/api/evaluate', methods=['POST'])
 def evaluate_prompt():
-    data = request.get_json()
-    prompt = data.get('prompt', '').strip()
+    prompt = request.get_json().get('prompt', '').strip()
     if not prompt:
         return jsonify({"error": "Prompt is required"}), 400
     score, criteria, suggestions = regex_evaluate_prompt(prompt)
@@ -77,8 +75,7 @@ def evaluate_prompt():
 
 @app.route('/api/evaluate_llama', methods=['POST'])
 def evaluate_prompt_llama():
-    data = request.get_json()
-    prompt = data.get('prompt', '').strip()
+    prompt = request.get_json().get('prompt', '').strip()
     if not prompt:
         return jsonify({"error": "Prompt is required"}), 400
 
@@ -117,8 +114,7 @@ def evaluate_prompt_llama():
 
 @app.route('/api/async_evaluate', methods=['POST'])
 def async_evaluate():
-    data = request.get_json()
-    prompt = data.get('prompt', '').strip()
+    prompt = request.get_json().get('prompt', '').strip()
     if not prompt:
         return jsonify({"error": "Prompt is required"}), 400
 
@@ -139,27 +135,18 @@ def task_status(task_id):
 
     if state == 'PENDING':
         return jsonify({"status": "pending"}), 202
-
     if state == 'SUCCESS':
         result = async_result.result
-        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
+        if isinstance(result, list) and result and isinstance(result[0], dict):
             result = result[0]
         if isinstance(result, dict) and ("error" in result or "reason" in result):
-            return jsonify({
-                "status": "failed",
-                "error": result.get("error", "Evaluation failed"),
-                "reason": result.get("reason", "")
-            }), 422
+            return jsonify({"status": "failed", **result}), 422
         if not isinstance(result, dict):
-            return jsonify({
-                "status": "error",
-                "error": "Unexpected result format"
-            }), 500
+            return jsonify({"status": "error", "error": "Unexpected result format"}), 500
         prompt = result.get("prompt", "[async prompt not returned]")
         score = result.get("score", 0)
         write_log_entry(prompt, "phi3 (async)", score)
         return jsonify({"status": "completed", "result": result}), 200
-
     if state == 'FAILURE':
         return jsonify({"status": "failed", "error": str(async_result.info)}), 500
 
@@ -167,9 +154,8 @@ def task_status(task_id):
 
 @app.route('/logs', methods=['GET'])
 def get_logs():
-    log_file_path = 'logs.jsonl'
     try:
-        with open(log_file_path, 'r', encoding='utf-8') as f:
+        with open('logs.jsonl', 'r', encoding='utf-8') as f:
             logs = [json.loads(line) for line in f if line.strip()]
         return jsonify(logs)
     except Exception as e:
@@ -177,8 +163,7 @@ def get_logs():
 
 @app.route('/api/improve_prompt', methods=['POST'])
 def improve_prompt():
-    data = request.get_json()
-    prompt = data.get("prompt", "").strip()
+    prompt = request.get_json().get("prompt", "").strip()
     if not prompt:
         return jsonify({"error": "Prompt is required."}), 400
 
@@ -205,5 +190,6 @@ def improve_prompt():
     except Exception:
         return jsonify({"improved": prompt, "error": "LLM failed"}), 200
 
+# ✅ FINAL: disable debug mode before launch
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)

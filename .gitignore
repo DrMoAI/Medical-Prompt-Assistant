@@ -8,7 +8,6 @@ __pycache__/
 logs/
 *.log
 *.jsonl
-*.json
 ollama.log
 batch_test_results.json
 evaluations.jsonl
@@ -26,7 +25,6 @@ patch_test.py
 
 # Secrets
 .env
-*.env
 
 # Node/JS artifacts
 node_modules/
@@ -40,9 +38,8 @@ node_modules/
 static/css/styles.backup.css
 
 # Screenshots or exported visuals
-Screenshot/
 screenshots/
-*.png
+screenshots/*.png
 
 # System/OS
 .DS_Store

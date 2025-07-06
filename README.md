@@ -104,12 +104,6 @@ This module rewrites vague or mid-quality clinical prompts into clearer, safer, 
 
 ---
 
-## 📸 Screenshots
-
-> *Paste annotated screenshots or GIFs here for each key UI flow.*
-
----
-
 ## 👨‍💻 Maintainer
 
 Moha Mohi  

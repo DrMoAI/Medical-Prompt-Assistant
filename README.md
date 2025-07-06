@@ -104,6 +104,12 @@ This module rewrites vague or mid-quality clinical prompts into clearer, safer, 
 
 ---
 
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
 ## 👨‍💻 Maintainer
 
 Moha Mohi  

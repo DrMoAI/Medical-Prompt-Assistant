@@ -1,17 +1,20 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()  # Load your .env with REDIS config
+
 import json
 import json5
-from json.decoder import JSONDecodeError
-import os
 import re
 from datetime import datetime
 import requests
+from json.decoder import JSONDecodeError
 from celery import Celery, Task
 from validators import validate_medical_prompt_result
 
 celery = Celery(
     'tasks',
-    broker=os.getenv('REDIS_URL'),
-    backend=os.getenv('REDIS_URL')
+    broker=os.getenv('CELERY_BROKER_URL'),
+    backend=os.getenv('CELERY_RESULT_BACKEND')
 )
 
 LOG_FILE = os.path.join("logs", "evaluations.jsonl")

@@ -61,6 +61,38 @@ This module rewrites vague or mid-quality clinical prompts into clearer, safer, 
 
 ---
 
+## 🖥️ System Requirements
+
+- Python 3.10+
+- Redis or Memurai (running locally)
+- [Ollama](https://ollama.com/) with compatible local LLM (e.g., `llama3`, `phi3`)
+- Git & a terminal (Command Prompt, PowerShell, or bash)
+- (Optional) VS Code or any code editor
+  
+... 
+
+## 🔧 How to Run Medical Prompt Assistant (Local Setup)
+
+# 1. Clone the repository
+git clone https://github.com/DrMoAI/Medical-Prompt-Assistant.git
+cd Medical-Prompt-Assistant
+
+# 2. Install Python dependencies
+pip install -r requirements.txt
+
+# 3. Make sure Redis (e.g. Memurai or Redis CLI) is running
+
+# 4. Start the Flask backend
+flask run
+
+# 5. In a separate terminal, start the Celery worker
+celery -A celery_worker.celery worker --loglevel=info
+
+# 6. Open your browser and go to:
+http://localhost:5000
+
+... 
+
 ## 🛠️ Usage Flow
 
 1. **Input Prompt:** Type/paste your clinical prompt (max 500 chars).

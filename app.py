@@ -1,9 +1,10 @@
 from flask import Flask, render_template, request, jsonify
-import re, json, os, requests
+import re, json, uuid, threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from dotenv import load_dotenv
-from celery_worker import evaluate_with_llama
-from validators import validate_medical_prompt_result
+import llm_client
+from evaluator import evaluate_prompt as run_llm_evaluation
 
 load_dotenv()
 app = Flask(__name__)
@@ -62,9 +63,9 @@ def index():
 
 @app.route('/api/evaluate', methods=['POST'])
 def evaluate_prompt():
-    prompt = request.get_json().get('prompt', '').strip()
-    if not prompt:
-        return jsonify({"error": "Prompt is required"}), 400
+    prompt, err = get_prompt()
+    if err:
+        return err
     score, criteria, suggestions = regex_evaluate_prompt(prompt)
     write_log_entry(prompt, "regex", score)
     return jsonify({
@@ -73,123 +74,118 @@ def evaluate_prompt():
         "suggestions": suggestions
     })
 
+MAX_PROMPT_CHARS = 500
+
+
+def get_prompt():
+    """Read and validate the prompt from the request. Returns (prompt, error_response)."""
+    data = request.get_json(silent=True) or {}
+    prompt = str(data.get('prompt', '')).strip()
+    if not prompt:
+        return None, (jsonify({"error": "Prompt is required"}), 400)
+    if len(prompt) > MAX_PROMPT_CHARS:
+        return None, (jsonify({"error": f"Prompt is too long (max {MAX_PROMPT_CHARS} characters)"}), 400)
+    return prompt, None
+
+
 @app.route('/api/evaluate_llama', methods=['POST'])
 def evaluate_prompt_llama():
-    prompt = request.get_json().get('prompt', '').strip()
-    if not prompt:
-        return jsonify({"error": "Prompt is required"}), 400
+    """Synchronous LLM evaluation (waits for the answer)."""
+    prompt, err = get_prompt()
+    if err:
+        return err
+    result = run_llm_evaluation(prompt)
+    if "error" in result:
+        return jsonify(result), 422
+    return jsonify(result)
 
-    system_instruction = (
-        "You are a prompt evaluator for medical prompts. "
-        "Evaluate based on Safety (30), Clinical Clarity (25), Specificity (20), "
-        "Instructional Style (15), Medical Terminology (10). Score 0–100 and give suggestions."
-    )
-    model_name = os.getenv("OLLAMA_MODEL", "llama3:8b-instruct-q4_K_M")
-    ollama_url = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434/api/generate")
 
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": 512,
-        "temperature": 0.2
-    }
+# Background jobs. Kept in memory: fine for a single local user, and it means
+# no Redis or Celery is needed. Jobs are lost if the app restarts.
+_executor = ThreadPoolExecutor(max_workers=2)
+_jobs = {}
+_jobs_lock = threading.Lock()
+MAX_JOBS = 200
 
-    try:
-        res = requests.post(ollama_url, json=payload, timeout=60)
-        res.raise_for_status()
-        content = res.json()["choices"][0]["message"]["content"]
-        cleaned = re.sub(r'```json\s*|\s*```', '', content).strip()
-        result = json.loads(cleaned)
-        is_valid, reason = validate_medical_prompt_result(result)
-        if not is_valid:
-            return jsonify({"error": "Validation failed", "reason": reason}), 400
-        score = result.get("score", 0)
-        write_log_entry(prompt, "phi3", score)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
+def _run_job(task_id, prompt):
+    result = run_llm_evaluation(prompt)
+    with _jobs_lock:
+        _jobs[task_id] = {"done": True, "result": result}
+
 
 @app.route('/api/async_evaluate', methods=['POST'])
 def async_evaluate():
-    prompt = request.get_json().get('prompt', '').strip()
-    if not prompt:
-        return jsonify({"error": "Prompt is required"}), 400
+    prompt, err = get_prompt()
+    if err:
+        return err
+    task_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[task_id] = {"done": False}
+        while len(_jobs) > MAX_JOBS:          # forget the oldest jobs
+            _jobs.pop(next(iter(_jobs)))
+    _executor.submit(_run_job, task_id, prompt)
+    return jsonify({"task_id": task_id}), 202
 
-    system_instruction = (
-        "You are a prompt evaluator for medical prompts. "
-        "Evaluate based on Safety (30), Clinical Clarity (25), Specificity (20), "
-        "Instructional Style (15), Medical Terminology (10). Return only a JSON object."
-    )
-    task_input = f"{system_instruction}\n\nPrompt:\n{prompt}\n\nReturn JSON with score, suggestions, criteria."
-    task = evaluate_with_llama.delay(task_input)
-    return jsonify({"task_id": task.id}), 202
 
 @app.route('/api/task/<task_id>', methods=['GET'])
 @app.route('/api/task_status/<task_id>', methods=['GET'])
 def task_status(task_id):
-    async_result = evaluate_with_llama.AsyncResult(task_id)
-    state = async_result.state
-
-    if state == 'PENDING':
+    with _jobs_lock:
+        job = _jobs.get(task_id)
+    if job is None:
+        return jsonify({"status": "failed", "error": "Unknown or expired task"}), 404
+    if not job["done"]:
         return jsonify({"status": "pending"}), 202
-    if state == 'SUCCESS':
-        result = async_result.result
-        if isinstance(result, list) and result and isinstance(result[0], dict):
-            result = result[0]
-        if isinstance(result, dict) and ("error" in result or "reason" in result):
-            return jsonify({"status": "failed", **result}), 422
-        if not isinstance(result, dict):
-            return jsonify({"status": "error", "error": "Unexpected result format"}), 500
-        prompt = result.get("prompt", "[async prompt not returned]")
-        score = result.get("score", 0)
-        write_log_entry(prompt, "phi3 (async)", score)
-        return jsonify({"status": "completed", "result": result}), 200
-    if state == 'FAILURE':
-        return jsonify({"status": "failed", "error": str(async_result.info)}), 500
+    result = job["result"]
+    if "error" in result:
+        return jsonify({"status": "failed", **result}), 422
+    return jsonify({"status": "completed", "result": result}), 200
 
-    return jsonify({"status": state}), 200
+
+def _is_local_request():
+    return request.remote_addr in ("127.0.0.1", "::1")
+
 
 @app.route('/logs', methods=['GET'])
 def get_logs():
+    # Logs contain every prompt that was submitted, so only this computer may read them.
+    if not _is_local_request():
+        return jsonify({"error": "Forbidden"}), 403
     try:
         with open('logs.jsonl', 'r', encoding='utf-8') as f:
             logs = [json.loads(line) for line in f if line.strip()]
         return jsonify(logs)
+    except FileNotFoundError:
+        return jsonify([])
     except Exception as e:
         return jsonify({"error": "Failed to read logs", "details": str(e)}), 500
 
+
+@app.route('/api/status', methods=['GET'])
+def status():
+    """Shows which model backend is configured (never the key itself)."""
+    return jsonify(llm_client.status())
+
+
 @app.route('/api/improve_prompt', methods=['POST'])
 def improve_prompt():
-    prompt = request.get_json().get("prompt", "").strip()
-    if not prompt:
-        return jsonify({"error": "Prompt is required."}), 400
+    prompt, err = get_prompt()
+    if err:
+        return err
 
     system_instruction = (
         "You are a clinical prompt editor. Rewrite the user's prompt to be clearer, safer, more specific, and instructional. "
         "Do not explain. Return ONLY the improved prompt, nothing else."
     )
-
-    payload = {
-        "model": "llama3:8b-instruct-q4_K_M",
-        "messages": [
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": 512,
-        "temperature": 0.3
-    }
-
     try:
-        res = requests.post("http://localhost:11434/v1/chat/completions", json=payload, timeout=60)
-        res.raise_for_status()
-        content = res.json()['choices'][0]['message']['content'].strip()
-        return jsonify({"improved": content})
-    except Exception:
-        return jsonify({"improved": prompt, "error": "LLM failed"}), 200
+        improved, backend = llm_client.chat(system_instruction, prompt, temperature=0.3, max_tokens=512)
+        return jsonify({"improved": improved, "backend": backend})
+    except llm_client.LLMError as e:
+        # Report the failure honestly instead of echoing the user's own prompt back.
+        return jsonify({"error": "LLM failed", "details": str(e)}), 502
+
 
 # ✅ FINAL: disable debug mode before launch
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='127.0.0.1', port=5000)

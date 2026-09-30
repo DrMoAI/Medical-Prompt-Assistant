@@ -64,34 +64,34 @@ This module rewrites vague or mid-quality clinical prompts into clearer, safer, 
 ## 🖥️ System Requirements
 
 - Python 3.10+
-- Redis or Memurai (running locally)
-- [Ollama](https://ollama.com/) with compatible local LLM (e.g., `llama3`, `phi3`)
+- Either (or both) of:
+  - **Paid API key** (fast, best quality, costs cents per hundred evaluations), or
+  - **[Ollama](https://ollama.com/)** with a local model such as `llama3` or `phi3` (free and fully private)
 - Git & a terminal (Command Prompt, PowerShell, or bash)
-- (Optional) VS Code or any code editor
-  
-... 
 
-## 🔧 How to Run Medical Prompt Assistant (Local Setup)
+No Redis or Celery is needed any more.
 
-# 1. Clone the repository
+## 🔧 How to Run (Local Setup)
+
+```
 git clone https://github.com/DrMoAI/Medical-Prompt-Assistant.git
 cd Medical-Prompt-Assistant
-
-# 2. Install Python dependencies
 pip install -r requirements.txt
+copy .env.example .env      (Linux/Mac: cp .env.example .env)
+```
 
-# 3. Make sure Redis (e.g. Memurai or Redis CLI) is running
+Edit `.env` and choose your model:
 
-# 4. Start the Flask backend
-flask run
+| `LLM_PROVIDER` | Behaviour |
+|----------------|-----------|
+| `auto` (default) | Uses the API if `ANTHROPIC_API_KEY` is set and working, otherwise falls back to local Ollama automatically |
+| `api` | API only |
+| `ollama` | Local Ollama only. Nothing leaves your computer |
 
-# 5. In a separate terminal, start the Celery worker
-celery -A celery_worker.celery worker --loglevel=info
+Then start the app (`python app.py`, or `run_all.bat` on Windows, which also starts Ollama) and open http://localhost:5000.
+`http://localhost:5000/api/status` shows which backend is configured.
 
-# 6. Open your browser and go to:
-http://localhost:5000
-
-... 
+---
 
 ## 🛠️ Usage Flow
 

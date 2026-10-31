@@ -30,12 +30,23 @@ def _settings():
         "provider": os.getenv("LLM_PROVIDER", "auto").strip().lower(),
         "api_key": os.getenv("ANTHROPIC_API_KEY", "").strip(),
         "api_model": os.getenv("ANTHROPIC_MODEL", DEFAULT_API_MODEL),
+        "api_effort": os.getenv("ANTHROPIC_EFFORT", "").strip().lower(),
         "ollama_model": os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
         "ollama_url": os.getenv("OLLAMA_ENDPOINT", DEFAULT_OLLAMA_URL),
     }
 
 
 def _call_api(cfg, system, user, temperature, max_tokens, timeout):
+    # `temperature` is deliberately NOT sent: newer models (Sonnet 5.5, Haiku 5.5,
+    # Opus 5.5 ...) reject it with a 400, and API version 2026-10-21 rejects it everywhere.
+    payload = {
+        "model": cfg["api_model"],
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+        "max_tokens": max_tokens,
+    }
+    if cfg["api_effort"]:        # low | medium | high ... (not accepted by Haiku 4.5)
+        payload["output_config"] = {"effort": cfg["api_effort"]}
     res = requests.post(
         API_URL,
         headers={
@@ -43,13 +54,7 @@ def _call_api(cfg, system, user, temperature, max_tokens, timeout):
             "anthropic-version": API_VERSION,
             "content-type": "application/json",
         },
-        json={
-            "model": cfg["api_model"],
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        },
+        json=payload,
         timeout=timeout,
     )
     res.raise_for_status()
@@ -104,6 +109,12 @@ def chat(system, user, temperature=0.2, max_tokens=700, timeout=60, json_mode=Fa
     if not errors:
         errors.append(f"Unknown LLM_PROVIDER '{provider}' (use auto, api or ollama).")
     raise LLMError("; ".join(errors))
+
+
+def model_name(backend):
+    """Name of the model that answers for `backend` ("api" or "ollama")."""
+    cfg = _settings()
+    return cfg["api_model"] if backend == "api" else cfg["ollama_model"]
 
 
 def status():
